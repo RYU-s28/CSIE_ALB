@@ -6,7 +6,6 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
-    ApiClient,
     Configuration,
     MessagingApi,
     ReplyMessageRequest,
@@ -40,6 +39,7 @@ configuration = Configuration(
 handler = WebhookHandler(CHANNEL_SECRET)
 
 tracker = AttendanceTracker()
+messaging_api = MessagingApi(configuration)
 
 
 @app.get("/")
@@ -106,3 +106,11 @@ def handle_message(event):
         f"{record.status} "
         f"({record.confidence})"
     )
+
+    normalized_text = (text or "").strip().lower()
+    response_text = "Pong!" if normalized_text in {"ping", "/ping"} else "Received"
+    reply_request = ReplyMessageRequest(
+        reply_token=event.reply_token,
+        messages=[TextMessage(text=response_text)],
+    )
+    messaging_api.reply_message(reply_message_request=reply_request)

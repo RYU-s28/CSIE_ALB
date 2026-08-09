@@ -7,3 +7,4 @@ fastapi
 uvicorn[standard]
 line-bot-sdk
 python-dotenv
+APScheduler>=3.11,<4

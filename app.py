@@ -18,6 +18,8 @@ from linebot.v3.webhooks import (
 )
 
 from attendance.attendance import AttendanceTracker
+from datetime import date
+from attendance.report import build_report
 
 
 # --------------------------------------------------
@@ -207,6 +209,29 @@ def handle_message(event):
         reply_to_line(
             event.reply_token,
             message,
+        )
+
+        return
+
+    # --------------------------------------------------
+    # /report
+    # Build the full attendance report text and send immediately
+    # --------------------------------------------------
+
+    if normalized_text == "/report":
+        records = tracker.get_records_for_date()
+
+        total_students = len({r.student_id for r in records})
+
+        report = build_report(
+            report_date=date.today(),
+            total_students=total_students,
+            records=records,
+        )
+
+        reply_to_line(
+            event.reply_token,
+            report,
         )
 
         return

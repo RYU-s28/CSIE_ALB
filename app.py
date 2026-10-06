@@ -25,7 +25,7 @@ from attendance.leave_message import (
 from bot.commands import handle_command, normalize_command
 from database.google_sheets import (
     ATTENDANCE_TABLE_RANGE,
-    attendance_sheet,
+    ensure_attendance_sheet,
     find_student_by_display_name,
     find_student_by_line_user_id,
 )
@@ -264,6 +264,15 @@ def handle_message(event):
             message=text,
             attendance_date=attendance_date,
         )
+
+        attendance_sheet = ensure_attendance_sheet()
+        if attendance_sheet is None:
+            reply_to_line(
+                event.reply_token,
+                "Google Sheets is not configured yet. Please contact an administrator.",
+            )
+            print("Attendance write skipped because spreadsheet config is unavailable.")
+            return
 
         attendance_sheet.append_row([
             record.student_id,

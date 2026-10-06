@@ -3,6 +3,10 @@
         "/^python -m unittest discover -s tests && python -m py_compile app\\.py attendance/leave_message\\.py database/google_sheets\\.py && git diff --check$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^python -m pip install -r requirements\\.txt$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

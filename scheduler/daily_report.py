@@ -7,7 +7,7 @@ from datetime import date
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from attendance.report import build_report
-from schedule.work_calendar import is_workday
+from scheduler.work_calendar import is_workday
 
 
 scheduler = BackgroundScheduler(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Iterable
+from typing import Callable, Iterable
 
 from .classifier import ClassificationResult, classify_status
 
@@ -48,8 +48,12 @@ class AttendanceTracker:
     Replace the internal dictionary with a database repository later.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        record_writer: Callable[[AttendanceRecord], None] | None = None,
+    ) -> None:
         self.records: dict[tuple[str, date], AttendanceRecord] = {}
+        self.record_writer = record_writer
 
     def add_from_message(
         self,
@@ -109,6 +113,8 @@ class AttendanceTracker:
             return
 
         self.records[key] = record
+        if self.record_writer is not None:
+            self.record_writer(record)
 
     def get_record(
         self,

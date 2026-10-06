@@ -1,5 +1,4 @@
 import os
-
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 
@@ -19,6 +18,11 @@ from linebot.v3.webhooks import (
 
 from attendance.attendance import AttendanceTracker
 from bot.commands import handle_command
+from database.google_sheets import (
+    attendance_sheet,
+    students_sheet,
+    work_calendar_sheet,
+)
 
 
 # --------------------------------------------------
@@ -50,7 +54,6 @@ configuration = Configuration(
 handler = WebhookHandler(CHANNEL_SECRET)
 
 tracker = AttendanceTracker()
-
 
 # --------------------------------------------------
 # Health check
@@ -170,6 +173,16 @@ def handle_message(event):
             student_id=user_id,
             message=text,
         )
+
+        attendance_sheet.append_row([
+            record.created_at.isoformat(),
+            record.student_id,
+            record.attendance_date.isoformat(),
+            record.status,
+            record.message,
+            record.confidence,
+            record.matched_keyword or "",
+        ])
 
         print("CLASSIFICATION:", record.status)
         print("CONFIDENCE:", record.confidence)

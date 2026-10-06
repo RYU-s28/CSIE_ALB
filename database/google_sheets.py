@@ -10,7 +10,7 @@ from gspread.exceptions import WorksheetNotFound
 
 from attendance.student_directory import (
     find_student_by_line_user_id as find_student,
-    find_student_by_name as find_student_name,
+    find_students_by_display_name as find_display_name_matches,
 )
 
 
@@ -36,6 +36,18 @@ spreadsheet = None
 students_sheet = None
 attendance_sheet = None
 logs_sheet = None
+
+
+class LineRegistrationConflictError(Exception):
+    """Raised when registering would replace an existing LINE user ID."""
+
+    def __init__(self, existing_user_id: str, incoming_user_id: str) -> None:
+        self.existing_user_id = existing_user_id
+        self.incoming_user_id = incoming_user_id
+        super().__init__(
+            f"LINE registration conflict: stored ID {existing_user_id!r} "
+            f"differs from incoming ID {incoming_user_id!r}."
+        )
 
 
 def connect_google_sheets():
@@ -134,9 +146,9 @@ HEADER_ALIASES = {
     "work_id": "student_id",
     "student_id": "student_id",
     "id": "student_id",
-    "chinese_name": "name",
+    "chinese_name": "chinese_name",
     "name": "name",
-    "full_name": "name",
+    "full_name": "full_name",
     "line_display_name": "display_name",
     "display_name": "display_name",
     "line_user_id": "line_user_id",
@@ -151,6 +163,7 @@ def _read_sheet_records(
     sheet,
     *,
     required_headers: tuple[str, ...],
+    include_row_metadata: bool = False,
 ) -> list[dict[str, object]]:
     """Read a sheet while tolerating blank or duplicate header cells."""
 
@@ -188,7 +201,7 @@ def _read_sheet_records(
             header_positions.append((i, canonical_name))
 
     records: list[dict[str, object]] = []
-    for row in rows[header_row_idx + 1:]:
+    for row_idx, row in enumerate(rows[header_row_idx + 1:], start=header_row_idx + 2):
         if not any(str(cell).strip() for cell in row):
             continue
 
@@ -197,6 +210,13 @@ def _read_sheet_records(
             if col_idx >= len(row):
                 continue
             record[header_name] = str(row[col_idx]).strip()
+
+        if include_row_metadata:
+            record["_row_number"] = row_idx
+            for col_idx, header_name in header_positions:
+                if header_name == "line_user_id":
+                    record["_line_user_id_column"] = col_idx + 1
+                    break
 
         if record:
             records.append(record)
@@ -212,22 +232,99 @@ def _read_students_records() -> list[dict[str, object]]:
 
     return _read_sheet_records(
         students_sheet,
-        required_headers=("student_id", "name", "line_user_id", "active", "display_name"),
+        required_headers=(
+            "student_id",
+            "name",
+            "full_name",
+            "line_user_id",
+            "active",
+            "display_name",
+        ),
+        include_row_metadata=True,
     )
 
 
-def find_student_by_line_user_id(line_user_id: str) -> dict[str, str] | None:
+def _student_identity(record: dict[str, object]) -> dict[str, object]:
+    """Expose the roster fields used downstream without losing row metadata."""
+
+    student = dict(record)
+    student["student_id"] = str(record.get("student_id", "")).strip()
+    student["name"] = str(
+        record.get("full_name")
+        or record.get("name")
+        or record.get("chinese_name")
+        or ""
+    ).strip()
+    return student
+
+
+def find_student_by_line_user_id(line_user_id: str) -> dict[str, object] | None:
     """Find the roster row associated with a LINE user ID."""
 
     students = _read_students_records()
-    return find_student(students, line_user_id)
+    identity = find_student(students, line_user_id)
+    if identity is None:
+        return None
+
+    for record in students:
+        if (
+            str(record.get("line_user_id", "")).strip() == str(line_user_id).strip()
+            and str(record.get("active", "")).strip().lower()
+            in {"true", "1", "yes"}
+        ):
+            result = _student_identity(record)
+            result.update(identity)
+            return result
+    return None
 
 
-def find_student_by_display_name(display_name: str) -> dict[str, str] | None:
-    """Find one active roster entry by exact LINE display name."""
+def find_students_by_display_name(
+    display_name: str,
+) -> list[dict[str, object]]:
+    """Find all active roster rows with an exact normalized LINE display name."""
 
     students = _read_students_records()
-    return find_student_name(students, display_name)
+    return [
+        _student_identity(record)
+        for record in find_display_name_matches(students, display_name)
+        if str(record.get("active", "")).strip().lower()
+        in {"true", "1", "yes"}
+    ]
+
+
+def find_student_by_display_name(display_name: str) -> dict[str, object] | None:
+    """Find one active roster entry by exact LINE display name."""
+
+    matches = find_students_by_display_name(display_name)
+    return matches[0] if len(matches) == 1 else None
+
+
+def register_line_user(
+    student_row: dict[str, object],
+    line_user_id: str,
+) -> None:
+    """Write a LINE user ID to one roster cell without replacing another ID."""
+
+    if ensure_sheet_state() is None or students_sheet is None:
+        raise RuntimeError("Google Sheets is unavailable for LINE registration.")
+
+    row_number = student_row.get("_row_number")
+    column_number = student_row.get("_line_user_id_column")
+    if not isinstance(row_number, int) or not isinstance(column_number, int):
+        raise ValueError("The matched Students row has no writable LINE User ID cell.")
+
+    existing_user_id = str(
+        students_sheet.cell(row_number, column_number).value or ""
+    ).strip()
+    incoming_user_id = str(line_user_id).strip()
+    if existing_user_id and existing_user_id != incoming_user_id:
+        raise LineRegistrationConflictError(existing_user_id, incoming_user_id)
+    if not existing_user_id:
+        students_sheet.update_cell(
+            row_number,
+            column_number,
+            incoming_user_id,
+        )
 
 
 def ensure_attendance_sheet():

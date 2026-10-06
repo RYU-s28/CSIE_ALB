@@ -14,14 +14,17 @@ with a populated `Logs` tab and an empty `Attendance` tab, it continues writing
 to the `Logs` table at `B4:G` so existing log data remains connected. The
 `Monthly Report` worksheet is not modified by the bot.
 
-The bot reads, but does not modify, a `Students` worksheet to map LINE accounts
-to student records. Its first row should contain `student_id`, `name`,
-`line_user_id`, and `active` columns. Add one row per student and set `active`
-to `TRUE`; inactive students are not matched. If the LINE user ID is not in the
-roster, the bot may fall back to an exact, unique match against the student's
-LINE display name. Because display names are user-controlled and can be
-duplicated, those entries are logged as `Pending` for review. An event without
-a LINE user ID cannot use profile-name fallback.
+The bot reads the existing `Students` worksheet and registers first-contact
+LINE accounts in place. Keep its columns named `Student ID`, `Chinese Name`,
+`Full Name`, `LINE Display Name`, `LINE User ID`, and `Active`. Set `Active` to
+`TRUE` for eligible students. Existing LINE user IDs are the permanent identity
+and are checked before display names. For a user ID not yet in the sheet, the
+bot compares the LINE group member's display name exactly (case-insensitive,
+with whitespace normalized) against active `LINE Display Name` values. It
+stores the ID in that student's `LINE User ID` cell only when there is exactly
+one match; unmatched and ambiguous names, or rows that already have a different
+LINE user ID, require administrator review. The original attendance message is
+processed immediately after successful registration.
 
 The attendance date parser recognizes today/tomorrow phrases and explicit dates
 such as `2026-10-07`. Leave categories are written with the configured Chinese

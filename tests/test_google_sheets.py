@@ -47,6 +47,87 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
             },
         )
 
+    def test_students_parser_preserves_line_registration_cell_location(self) -> None:
+        import database.google_sheets as google_sheets
+
+        rows = [
+            ["", "Student ID", "Chinese Name", "Full Name", "LINE Display Name", "LINE User ID", "Active"],
+            ["", "24113328", "杜榮瑪", "Michael Arbor", "MICHAEL(潘伯森)", "", "TRUE"],
+        ]
+        records = google_sheets._read_sheet_records(
+            type("SheetStub", (), {"get_all_values": lambda self: rows})(),
+            required_headers=(
+                "student_id",
+                "full_name",
+                "line_user_id",
+                "active",
+                "display_name",
+            ),
+            include_row_metadata=True,
+        )
+
+        self.assertEqual(records[0]["student_id"], "24113328")
+        self.assertEqual(records[0]["chinese_name"], "杜榮瑪")
+        self.assertEqual(records[0]["full_name"], "Michael Arbor")
+        self.assertEqual(records[0]["display_name"], "MICHAEL(潘伯森)")
+        self.assertEqual(records[0]["_row_number"], 2)
+        self.assertEqual(records[0]["_line_user_id_column"], 6)
+
+    def test_registration_updates_only_line_user_id_cell(self) -> None:
+        import database.google_sheets as google_sheets
+
+        class SheetStub:
+            def __init__(self, existing_user_id: str = "") -> None:
+                self.updated = None
+                self.existing_user_id = existing_user_id
+
+            def cell(self, row: int, column: int):
+                return type(
+                    "Cell",
+                    (),
+                    {"value": self.existing_user_id},
+                )()
+
+            def update_cell(self, row: int, column: int, value: str) -> None:
+                self.updated = (row, column, value)
+
+        sheet = SheetStub()
+        with (
+            mock.patch.object(google_sheets, "students_sheet", sheet),
+            mock.patch.object(google_sheets, "ensure_sheet_state", return_value=object()),
+        ):
+            google_sheets.register_line_user(
+                {"_row_number": 8, "_line_user_id_column": 6},
+                "U123",
+            )
+
+        self.assertEqual(sheet.updated, (8, 6, "U123"))
+
+    def test_registration_never_overwrites_an_existing_user_id(self) -> None:
+        import database.google_sheets as google_sheets
+
+        class SheetStub:
+            def cell(self, row: int, column: int):
+                return type("Cell", (), {"value": "U111"})()
+
+            def update_cell(self, row: int, column: int, value: str) -> None:
+                raise AssertionError("An existing LINE ID must not be overwritten")
+
+        with (
+            mock.patch.object(google_sheets, "students_sheet", SheetStub()),
+            mock.patch.object(google_sheets, "ensure_sheet_state", return_value=object()),
+        ):
+            with self.assertRaises(
+                google_sheets.LineRegistrationConflictError
+            ) as raised:
+                google_sheets.register_line_user(
+                    {"_row_number": 8, "_line_user_id_column": 6},
+                    "U222",
+                )
+
+        self.assertEqual(raised.exception.existing_user_id, "U111")
+        self.assertEqual(raised.exception.incoming_user_id, "U222")
+
 
 if __name__ == "__main__":
     unittest.main()

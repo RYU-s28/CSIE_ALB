@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 
@@ -24,10 +25,11 @@ from attendance.leave_message import (
 )
 from bot.commands import handle_command, normalize_command
 from database.google_sheets import (
-    ATTENDANCE_TABLE_RANGE,
     ensure_attendance_sheet,
-    find_student_by_display_name,
+    find_students_by_display_name,
     find_student_by_line_user_id,
+    LineRegistrationConflictError,
+    register_line_user,
 )
 
 
@@ -156,7 +158,144 @@ def get_line_display_name(
     except Exception as error:
         print("LINE PROFILE LOOKUP ERROR:", repr(error))
         return None
-        
+
+
+def get_line_group_member_profile(
+    group_id: str,
+    line_user_id: str,
+) -> str | None:
+    """Fetch a member's LINE display name from the group Messaging API."""
+
+    try:
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            profile = messaging_api.get_group_member_profile(
+                group_id,
+                line_user_id,
+            )
+        return profile.display_name
+    except Exception as error:
+        print("LINE GROUP MEMBER PROFILE LOOKUP ERROR:", repr(error))
+        return None
+
+
+@dataclass
+class StudentIdentification:
+    status: str
+    student: dict[str, object] | None = None
+    display_name: str | None = None
+
+
+def identify_or_register_student(event) -> StudentIdentification:
+    """Resolve a sender by LINE user ID, registering only an exact first match."""
+
+    line_user_id = str(
+        getattr(event.source, "user_id", None) or ""
+    ).strip()
+    if not line_user_id:
+        return StudentIdentification(status="missing_user_id")
+
+    student = find_student_by_line_user_id(line_user_id)
+    if student is not None:
+        print(
+            "LINE user already registered:",
+            f"{line_user_id} → {student['name']}",
+        )
+        return StudentIdentification(status="identified", student=student)
+
+    group_id = getattr(event.source, "group_id", None)
+    room_id = getattr(event.source, "room_id", None)
+    if group_id:
+        display_name = get_line_group_member_profile(
+            str(group_id),
+            line_user_id,
+        )
+    else:
+        display_name = get_line_display_name(
+            line_user_id,
+            room_id=room_id,
+        )
+    if display_name is None:
+        print("First-contact LINE profile unavailable:", line_user_id)
+        return StudentIdentification(status="profile_unavailable")
+
+    print(f"First contact detected: {line_user_id} / {display_name}")
+    matches = find_students_by_display_name(display_name)
+
+    if not matches:
+        print(
+            "Unmatched first-contact LINE user:\n"
+            f"Display Name: {display_name}\n"
+            f"LINE User ID: {line_user_id}"
+        )
+        print("No Students sheet match for LINE display name:", display_name)
+        return StudentIdentification(
+            status="unmatched",
+            display_name=display_name,
+        )
+
+    if len(matches) > 1:
+        possible_matches = ", ".join(
+            str(match.get("name", "")).strip() for match in matches
+        )
+        print(
+            "Ambiguous LINE registration:\n"
+            f"Display Name: {display_name}\n"
+            f"Possible matches: {possible_matches}\n"
+            f"LINE User ID: {line_user_id}"
+        )
+        print("Ambiguous display-name match:", display_name)
+        return StudentIdentification(
+            status="ambiguous",
+            display_name=display_name,
+        )
+
+    student = matches[0]
+    existing_user_id = str(student.get("line_user_id", "")).strip()
+    if existing_user_id and existing_user_id != line_user_id:
+        print(
+            "LINE registration conflict\n"
+            f"Student: {student.get('name', '')}\n"
+            f"Existing LINE User ID: {existing_user_id}\n"
+            f"Incoming LINE User ID: {line_user_id}"
+        )
+        return StudentIdentification(
+            status="conflict",
+            display_name=display_name,
+        )
+
+    try:
+        register_line_user(student, line_user_id)
+    except LineRegistrationConflictError as error:
+        print(
+            "LINE registration conflict\n"
+            f"Student: {student.get('name', '')}\n"
+            f"Existing LINE User ID: {error.existing_user_id}\n"
+            f"Incoming LINE User ID: {error.incoming_user_id}"
+        )
+        return StudentIdentification(
+            status="conflict",
+            display_name=display_name,
+        )
+
+    student["line_user_id"] = line_user_id
+    print(
+        "Registered LINE user:\n"
+        f"Display Name: {display_name}\n"
+        f"Student: {student.get('name', '')}\n"
+        f"LINE User ID: {line_user_id}"
+    )
+    print(
+        "First-contact registration successful:",
+        f"{display_name} → {student.get('student_id', '')} {student.get('name', '')}",
+    )
+    return StudentIdentification(
+        status="registered",
+        student=student,
+        display_name=display_name,
+    )
+
+
 @handler.add(
     MessageEvent,
     message=TextMessageContent,
@@ -164,23 +303,13 @@ def get_line_display_name(
 def handle_message(event):
     text = event.message.text or ""
 
-    user_id = getattr(
-        event.source,
-        "user_id",
-        None,
-    )
+    user_id = str(getattr(event.source, "user_id", None) or "").strip() or None
 
     group_id = getattr(
         event.source,
         "group_id",
         None,
     )
-    room_id = getattr(
-        event.source,
-        "room_id",
-        None,
-    )
-
     print("------------------------------")
     print("USER:", user_id)
     print("GROUP:", group_id)
@@ -190,16 +319,8 @@ def handle_message(event):
     if user_id and normalize_command(text) == "statusme":
         try:
             student = find_student_by_line_user_id(user_id)
-            if student is None:
-                display_name = get_line_display_name(
-                    user_id,
-                    group_id=group_id,
-                    room_id=room_id,
-                )
-                if display_name:
-                    student = find_student_by_display_name(display_name)
             if student:
-                command_student_id = student["student_id"]
+                command_student_id = str(student["student_id"])
         except Exception as error:
             print("STUDENT LOOKUP ERROR:", repr(error))
 
@@ -233,34 +354,44 @@ def handle_message(event):
     # --------------------------------------------------
 
     try:
-        student = find_student_by_line_user_id(user_id)
-        matched_by_line_user_id = student is not None
-        if student is None:
-            display_name = get_line_display_name(
-                user_id,
-                group_id=group_id,
-                room_id=room_id,
-            )
-            if display_name:
-                student = find_student_by_display_name(display_name)
-                if student is not None:
-                    print(
-                        "Student matched by display name; requires review:",
-                        display_name,
-                    )
+        identification = identify_or_register_student(event)
+        student = identification.student
 
         if student is None:
+            if identification.status == "unmatched":
+                reply_message = (
+                    "Your LINE account could not be matched to a student record.\n\n"
+                    f"LINE display name: {identification.display_name}\n\n"
+                    "Please ask an administrator to check your LINE Display Name "
+                    "in the Students sheet."
+                )
+            elif identification.status == "ambiguous":
+                reply_message = (
+                    "Your LINE account matches more than one student record.\n\n"
+                    "Please ask an administrator to confirm your account."
+                )
+            elif identification.status == "conflict":
+                reply_message = (
+                    "Your LINE account is already associated with a different "
+                    "account on the student record. Please ask an administrator "
+                    "to confirm your account."
+                )
+            else:
+                reply_message = (
+                    "I couldn't verify your LINE profile. Please ask an "
+                    "administrator to confirm your account."
+                )
             reply_to_line(
                 event.reply_token,
-                "Your LINE account could not be matched to a student record. Ask an administrator to check the Students sheet.",
+                reply_message,
             )
-            print("Unmatched LINE user:", user_id)
             return
 
+        matched_by_line_user_id = True
         classification = classify_status(text)
         attendance_date = parse_attendance_date(text)
         record = tracker.add_from_message(
-            student_id=student["student_id"],
+            student_id=str(student["student_id"]),
             message=text,
             attendance_date=attendance_date,
         )
@@ -276,7 +407,7 @@ def handle_message(event):
 
         attendance_sheet.append_row([
             record.student_id,
-            student["name"],
+            str(student["name"]),
             record.attendance_date.isoformat(),
             LEAVE_TYPE_LABELS[record.status],
             "Confirmed"

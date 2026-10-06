@@ -30,6 +30,7 @@ ATTENDANCE_HEADERS = [
     "status",
     "raw_message",
 ]
+LOGS_HEADERS = ["Work ID", "Name", "Date", "Type", "Status", "Raw Message"]
 
 
 def connect_google_sheets():
@@ -50,13 +51,43 @@ students_sheet = spreadsheet.worksheet("Students")
 try:
     attendance_sheet = spreadsheet.worksheet("Attendance")
 except WorksheetNotFound:
+    attendance_sheet = None
+
+try:
+    logs_sheet = spreadsheet.worksheet("Logs")
+except WorksheetNotFound:
+    logs_sheet = None
+
+attendance_values = (
+    attendance_sheet.get_all_values()
+    if attendance_sheet is not None
+    else []
+)
+logs_header = logs_sheet.acell("B4").value if logs_sheet is not None else None
+
+if attendance_sheet is not None and len(attendance_values) > 1:
+    ATTENDANCE_TABLE_RANGE = "A1:F1"
+elif logs_sheet is not None and logs_header:
+    # Keep an existing legacy Logs tab connected while Attendance is empty.
+    attendance_sheet = logs_sheet
+    ATTENDANCE_TABLE_RANGE = "B4:G4"
+elif attendance_sheet is not None:
+    ATTENDANCE_TABLE_RANGE = "A1:F1"
+elif logs_sheet is not None:
+    attendance_sheet = logs_sheet
+    ATTENDANCE_TABLE_RANGE = "B4:G4"
+    attendance_sheet.update(
+        range_name=ATTENDANCE_TABLE_RANGE,
+        values=[LOGS_HEADERS],
+        value_input_option="RAW",
+    )
+else:
     attendance_sheet = spreadsheet.add_worksheet(
         title="Attendance",
         rows=1000,
         cols=len(ATTENDANCE_HEADERS),
     )
-
-if not attendance_sheet.get_all_values():
+    ATTENDANCE_TABLE_RANGE = "A1:F1"
     attendance_sheet.append_row(
         ATTENDANCE_HEADERS,
         value_input_option="RAW",

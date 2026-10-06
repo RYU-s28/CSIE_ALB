@@ -29,6 +29,8 @@ def handle_command(
     text: str,
     tracker: AttendanceTracker,
     user_id: str | None = None,
+    *,
+    student_id: str | None = None,
 ) -> str | None:
     command = normalize_command(text)
 
@@ -43,7 +45,8 @@ def handle_command(
     if command == "ping":
         return "Pong! Attendance bot is online ✅"
     if command == "statusme":
-        record = tracker.get_record(user_id) if user_id else None
+        record_id = student_id or user_id
+        record = tracker.get_record(record_id) if record_id else None
         if not record:
             return "No attendance record found for you today."
         return (

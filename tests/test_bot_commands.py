@@ -53,6 +53,18 @@ class HandleCommandTests(unittest.TestCase):
     def test_unknown_text_is_not_a_command(self) -> None:
         self.assertIsNone(handle_command("I am present", self.tracker))
 
+    def test_statusme_uses_roster_student_id(self) -> None:
+        self.tracker.add_from_message("24113328", "病假")
+
+        response = handle_command(
+            "statusme",
+            self.tracker,
+            "U123",
+            student_id="24113328",
+        )
+
+        self.assertIn("sick_leave", response)
+
 
 if __name__ == "__main__":
     unittest.main()

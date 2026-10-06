@@ -22,7 +22,7 @@ from attendance.leave_message import (
     LEAVE_TYPE_LABELS,
     parse_attendance_date,
 )
-from bot.commands import handle_command
+from bot.commands import handle_command, normalize_command
 from database.google_sheets import (
     ATTENDANCE_TABLE_RANGE,
     attendance_sheet,
@@ -186,7 +186,29 @@ def handle_message(event):
     print("GROUP:", group_id)
     print("MESSAGE:", text)
 
-    command_response = handle_command(text, tracker, user_id)
+    command_student_id = None
+    if user_id and normalize_command(text) == "statusme":
+        try:
+            student = find_student_by_line_user_id(user_id)
+            if student is None:
+                display_name = get_line_display_name(
+                    user_id,
+                    group_id=group_id,
+                    room_id=room_id,
+                )
+                if display_name:
+                    student = find_student_by_display_name(display_name)
+            if student:
+                command_student_id = student["student_id"]
+        except Exception as error:
+            print("STUDENT LOOKUP ERROR:", repr(error))
+
+    command_response = handle_command(
+        text,
+        tracker,
+        user_id,
+        student_id=command_student_id,
+    )
     if command_response is not None:
         reply_to_line(
             event.reply_token,
@@ -254,6 +276,13 @@ def handle_message(event):
             record.message,
         ], table_range=ATTENDANCE_TABLE_RANGE, value_input_option="RAW")
 
+        reply_to_line(
+            event.reply_token,
+            f"Attendance saved for {student['name']}: "
+            f"{LEAVE_TYPE_LABELS[record.status]} on "
+            f"{record.attendance_date.isoformat()}.",
+        )
+
         print("CLASSIFICATION:", record.status)
         print("CONFIDENCE:", record.confidence)
         print("MATCHED KEYWORD:", record.matched_keyword)
@@ -262,4 +291,8 @@ def handle_message(event):
         print(
             "ATTENDANCE CLASSIFICATION ERROR:",
             repr(error),
+        )
+        reply_to_line(
+            event.reply_token,
+            "I couldn't save your attendance. Please try again or contact an administrator.",
         )

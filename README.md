@@ -7,10 +7,12 @@ Set `GOOGLE_SERVICE_ACCOUNT_JSON` to the service account credentials JSON and
 `GOOGLE_SHEET_ID` to the spreadsheet ID. Share the spreadsheet with the service
 account's email address, with edit access.
 
-The bot writes only to the `Attendance` worksheet, with columns
+The bot writes attendance to the `Attendance` worksheet, with columns
 `student_id`, `name`, `date`, `type`, `status`, and `raw_message`. It creates
-this worksheet and its header row if they do not exist. The `Monthly Report`
-worksheet is not modified by the bot and can use formulas based on `Attendance`.
+this worksheet and its header row if they do not exist. For an existing workbook
+with a populated `Logs` tab and an empty `Attendance` tab, it continues writing
+to the `Logs` table at `B4:G` so existing log data remains connected. The
+`Monthly Report` worksheet is not modified by the bot.
 
 The bot reads, but does not modify, a `Students` worksheet to map LINE accounts
 to student records. Its first row should contain `student_id`, `name`,

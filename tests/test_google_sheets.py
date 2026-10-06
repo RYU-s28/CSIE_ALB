@@ -34,7 +34,7 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
         ]
 
         result = google_sheets._read_sheet_records(
-            type("SheetStub", (), {"get_all_values": lambda self: rows})(),
+            type("SheetStub", (), {"get_all_values": lambda self, pad_values=False: rows})(),
             required_headers=("student_id", "name", "line_user_id", "active"),
         )
 
@@ -56,7 +56,7 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
             ["", "24113328", "杜榮瑪", "Michael Arbor", "MICHAEL(潘伯森)", "", "TRUE"],
         ]
         records = google_sheets._read_sheet_records(
-            type("SheetStub", (), {"get_all_values": lambda self: rows})(),
+            type("SheetStub", (), {"get_all_values": lambda self, pad_values=False: rows})(),
             required_headers=(
                 "student_id",
                 "full_name",
@@ -94,6 +94,46 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
             student = google_sheets.find_student_by_line_user_id(" U123 ")
 
         self.assertEqual(student["student_id"], "S06516")
+        self.assertEqual(student["chinese_name"], "杜樂珮")
+        self.assertEqual(student["name"], "Romel R. Duran Jr.")
+
+    def test_roster_identity_reads_work_id_from_column_b_with_title_rows(self) -> None:
+        import database.google_sheets as google_sheets
+
+        class SheetStub:
+            def get_all_values(self, pad_values=False):
+                return [
+                    ["Attendance roster"],
+                    [],
+                    [],
+                    [
+                        "",
+                        "Work ID",
+                        "Chinese Name",
+                        "Full Name",
+                        "LINE Display Name",
+                        "LINE User ID",
+                        "Active",
+                    ],
+                    [
+                        "",
+                        "S06677",
+                        "杜樂珮",
+                        "Romel R. Duran Jr.",
+                        "杜樂珮RYU",
+                        "Uregistered",
+                        "TRUE",
+                    ],
+                ]
+
+        with (
+            mock.patch.object(google_sheets, "students_sheet", SheetStub()),
+            mock.patch.object(google_sheets, "ensure_sheet_state", return_value=object()),
+        ):
+            student = google_sheets.find_student_by_line_user_id("Uregistered")
+
+        self.assertIsNotNone(student)
+        self.assertEqual(student["student_id"], "S06677")
         self.assertEqual(student["chinese_name"], "杜樂珮")
         self.assertEqual(student["name"], "Romel R. Duran Jr.")
 
@@ -197,23 +237,27 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
 
         self.assertEqual(matches, [])
 
-    def test_attendance_append_uses_logs_table_range(self) -> None:
+    def test_attendance_append_updates_next_row_under_logs_headers(self) -> None:
         import database.google_sheets as google_sheets
 
         class SheetStub:
             def __init__(self) -> None:
-                self.appended = None
+                self.updated = None
 
-            def get_all_values(self):
+            def get_all_values(self, pad_values=False):
                 return [
                     [],
                     [],
                     [],
                     ["", "Work ID", "Name", "Date", "Type", "Status", "Raw Message"],
+                    [],
+                    [],
+                    [],
+                    ["", "S00001", "Existing Student", "2026-10-05", "病假", "Confirmed", "old"],
                 ]
 
-            def append_row(self, values, **kwargs) -> None:
-                self.appended = (values, kwargs)
+            def update(self, *, range_name, values, value_input_option) -> None:
+                self.updated = (range_name, values, value_input_option)
 
         sheet = SheetStub()
         values = [
@@ -239,16 +283,7 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
             appended = google_sheets.append_attendance_row(values)
 
         self.assertTrue(appended)
-        self.assertEqual(
-            sheet.appended,
-            (
-                values,
-                {
-                    "value_input_option": "RAW",
-                    "table_range": "B4:G4",
-                },
-            ),
-        )
+        self.assertEqual(sheet.updated, ("B9:G9", [values], "RAW"))
 
     def test_attendance_header_scan_finds_legacy_table_position(self) -> None:
         import database.google_sheets as google_sheets
@@ -257,7 +292,7 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
             "SheetStub",
             (),
             {
-                "get_all_values": lambda self: [
+                "get_all_values": lambda self, pad_values=False: [
                     ["Attendance title"],
                     [],
                     [],
@@ -339,7 +374,7 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
                 ]
                 self.updated = None
 
-            def get_all_values(self):
+            def get_all_values(self, pad_values=False):
                 return self.values
 
             def update(self, *, range_name, values, value_input_option):
@@ -368,7 +403,7 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
         import database.google_sheets as google_sheets
 
         class SheetStub:
-            def get_all_values(self):
+            def get_all_values(self, pad_values=False):
                 return [
                     ["Work ID", "Name", "Date", "Type", "Status", "Raw Message"],
                     ["S1", "Student One", "2026-10-10", "遲到", "Confirmed", ""],

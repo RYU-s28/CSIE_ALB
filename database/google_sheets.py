@@ -179,7 +179,10 @@ def _find_attendance_table(sheet) -> str | None:
         "raw_message": "raw_message",
         "rawmessage": "raw_message",
     }
-    for row_number, row in enumerate(sheet.get_all_values(), start=1):
+    for row_number, row in enumerate(
+        sheet.get_all_values(pad_values=True),
+        start=1,
+    ):
         found_columns = [
             index
             for index, value in enumerate(row)
@@ -236,7 +239,7 @@ def _read_sheet_records(
     if sheet is None:
         return []
 
-    rows = sheet.get_all_values()
+    rows = sheet.get_all_values(pad_values=True)
     if not rows:
         return []
 
@@ -459,7 +462,7 @@ def _attendance_header_layout():
         start_column = start_column * 26 + ord(character) - ord("A") + 1
     start_column -= 1
     header_row = int(match.group(2))
-    rows = sheet.get_all_values()
+    rows = sheet.get_all_values(pad_values=True)
     headers = rows[header_row - 1][start_column:]
     normalized = [_normalize_header_name(cell) for cell in headers]
     aliases = {
@@ -587,7 +590,7 @@ def upsert_attendance_record(
 ) -> dict[str, str]:
     """Create or replace one student/date record and audit the change."""
 
-    sheet, _, _, columns = _attendance_header_layout()
+    sheet, rows, header_row, columns = _attendance_header_layout()
     previous = get_attendance_record(student_id, target_date)
     old_status = previous.get("type", "") if previous else ""
     values_by_header = {
@@ -620,10 +623,25 @@ def upsert_attendance_record(
                 value_input_option="RAW",
             )
         else:
-            sheet.append_row(
-                _attendance_row_values(columns, values_by_header),
+            last_data_row = header_row
+            for row_number, row in enumerate(
+                rows[header_row:],
+                start=header_row + 1,
+            ):
+                if any(
+                    column - 1 < len(row) and str(row[column - 1]).strip()
+                    for column in columns.values()
+                ):
+                    last_data_row = row_number
+            first_column = min(columns.values())
+            last_column = max(columns.values())
+            sheet.update(
+                range_name=(
+                    f"{_column_letter(first_column)}{last_data_row + 1}:"
+                    f"{_column_letter(last_column)}{last_data_row + 1}"
+                ),
+                values=[_attendance_row_values(columns, values_by_header)],
                 value_input_option="RAW",
-                table_range=ATTENDANCE_TABLE_RANGE,
             )
     except Exception:
         _mark_audit_action(action_id, "FAILED", "Attendance write failed.")
@@ -863,7 +881,7 @@ def append_attendance_row(values: list[object]) -> bool:
     if sheet is None:
         return False
 
-    _, _, _, columns = _attendance_header_layout()
+    _, rows, header_row, columns = _attendance_header_layout()
     ordered_values = _attendance_row_values(
         columns,
         {
@@ -875,9 +893,24 @@ def append_attendance_row(values: list[object]) -> bool:
             "raw_message": raw_message,
         },
     )
-    sheet.append_row(
-        ordered_values,
+    last_data_row = header_row
+    for row_number, row in enumerate(
+        rows[header_row:],
+        start=header_row + 1,
+    ):
+        if any(
+            column - 1 < len(row) and str(row[column - 1]).strip()
+            for column in columns.values()
+        ):
+            last_data_row = row_number
+    first_column = min(columns.values())
+    last_column = max(columns.values())
+    sheet.update(
+        range_name=(
+            f"{_column_letter(first_column)}{last_data_row + 1}:"
+            f"{_column_letter(last_column)}{last_data_row + 1}"
+        ),
+        values=[ordered_values],
         value_input_option="RAW",
-        table_range=ATTENDANCE_TABLE_RANGE,
     )
     return True

@@ -361,8 +361,14 @@ def handle_message(event):
 
     classification = classify_status(text)
     if (
-        classification.status == "unknown"
-        or classification.confidence < MIN_ATTENDANCE_CONFIDENCE
+        (
+            classification.status == "unknown"
+            and not classification.attendance_intent
+        )
+        or (
+            classification.status != "unknown"
+            and classification.confidence < MIN_ATTENDANCE_CONFIDENCE
+        )
     ):
         print(
             "Non-attendance LINE message ignored:",
@@ -455,6 +461,7 @@ def handle_message(event):
             if classification.status != "unknown" and matched_by_line_user_id
             else "Pending",
             record.message,
+            record.attendance_intent,
         ]):
             reply_to_line(
                 event.reply_token,

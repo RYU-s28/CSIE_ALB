@@ -11,6 +11,7 @@ class ClassificationResult:
     status: str
     confidence: float
     matched_keyword: str | None = None
+    attendance_intent: bool = False
 
 
 KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -33,6 +34,11 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
         "sick",
         "body ache",
         "body pain",
+        "back pain",
+        "backache",
+        "lower back pain",
+        "背痛",
+        "腰痛",
         "fever",
         "not feeling well",
         "feeling unwell",
@@ -201,25 +207,22 @@ def classify_status(message: str) -> ClassificationResult:
         return _unknown_result()
 
     if matched_status is None:
-        matched_status = "personal_leave"
-        matched_keyword = next(
-            (
-                phrase
-                for phrase in CHINESE_LEAVE_INTENT_PHRASES
-                if phrase in text
-            ),
-            "work absence",
-        )
+        return _unknown_result(attendance_intent=has_leave_intent)
 
     return ClassificationResult(
         status=matched_status,
         confidence=confidence,
         matched_keyword=matched_keyword,
+        attendance_intent=True,
     )
 
 
-def _unknown_result() -> ClassificationResult:
-    return ClassificationResult(status="unknown", confidence=0.0)
+def _unknown_result(*, attendance_intent: bool = False) -> ClassificationResult:
+    return ClassificationResult(
+        status="unknown",
+        confidence=0.0,
+        attendance_intent=attendance_intent,
+    )
 
 
 def normalize_text(text: str) -> str:

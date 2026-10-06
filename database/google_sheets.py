@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials
 from gspread.exceptions import WorksheetNotFound
 
+from attendance.classifier import classify_status
 from attendance.student_directory import (
     find_student_by_line_user_id as find_student,
     find_students_by_display_name as find_display_name_matches,
@@ -34,8 +35,17 @@ ATTENDANCE_HEADERS = [
     "type",
     "status",
     "raw_message",
+    "attendance_intent",
 ]
-LOGS_HEADERS = ["Work ID", "Name", "Date", "Type", "Status", "Raw Message"]
+LOGS_HEADERS = [
+    "Work ID",
+    "Name",
+    "Date",
+    "Type",
+    "Status",
+    "Raw Message",
+    "Attendance Intent",
+]
 AUDIT_HEADERS = [
     "Action ID",
     "Timestamp",
@@ -137,14 +147,14 @@ def ensure_sheet_state():
     if existing_table is not None:
         attendance_sheet, ATTENDANCE_TABLE_RANGE = existing_table
     elif attendance_sheet is not None:
-        ATTENDANCE_TABLE_RANGE = "A1:F1"
+        ATTENDANCE_TABLE_RANGE = "A1:G1"
         attendance_sheet.append_row(
             ATTENDANCE_HEADERS,
             value_input_option="RAW",
         )
     elif logs_sheet is not None:
         attendance_sheet = logs_sheet
-        ATTENDANCE_TABLE_RANGE = "B4:G4"
+        ATTENDANCE_TABLE_RANGE = "B4:H4"
         attendance_sheet.update(
             range_name=ATTENDANCE_TABLE_RANGE,
             values=[LOGS_HEADERS],
@@ -156,7 +166,7 @@ def ensure_sheet_state():
             rows=1000,
             cols=len(ATTENDANCE_HEADERS),
         )
-        ATTENDANCE_TABLE_RANGE = "A1:F1"
+        ATTENDANCE_TABLE_RANGE = "A1:G1"
         attendance_sheet.append_row(
             ATTENDANCE_HEADERS,
             value_input_option="RAW",
@@ -178,6 +188,10 @@ def _find_attendance_table(sheet) -> str | None:
         "status": "status",
         "raw_message": "raw_message",
         "rawmessage": "raw_message",
+        "attendance_intent": "attendance_intent",
+        "attendanceintent": "attendance_intent",
+        "attendance_intent": "attendance_intent",
+        "attendanceintent": "attendance_intent",
     }
     for row_number, row in enumerate(
         sheet.get_all_values(pad_values=True),
@@ -483,6 +497,60 @@ def _attendance_header_layout():
     required = {"student_id", "name", "date", "type", "status"}
     if not required.issubset(columns):
         raise ValueError(f"Attendance headers are missing columns: {required - columns.keys()}")
+    if "attendance_intent" not in columns:
+        last_header_column = max(
+            (
+                index + 1
+                for index, value in enumerate(rows[header_row - 1])
+                if str(value).strip()
+            ),
+            default=max(columns.values()),
+        )
+        intent_column = last_header_column + 1
+        sheet.update(
+            range_name=(
+                f"{_column_letter(intent_column)}{header_row}:"
+                f"{_column_letter(intent_column)}{header_row}"
+            ),
+            values=[["attendance_intent"]],
+            value_input_option="RAW",
+        )
+        columns["attendance_intent"] = intent_column
+        header_values = rows[header_row - 1]
+        header_values.extend([""] * (intent_column - len(header_values)))
+        header_values[intent_column - 1] = "attendance_intent"
+
+        data_rows = rows[header_row:]
+        if data_rows:
+            intent_values = []
+            for offset, row in enumerate(data_rows, start=header_row + 1):
+                has_student = (
+                    columns["student_id"] - 1 < len(row)
+                    and bool(str(row[columns["student_id"] - 1]).strip())
+                )
+                raw_message = (
+                    str(row[columns["raw_message"] - 1])
+                    if has_student
+                    and "raw_message" in columns
+                    and columns["raw_message"] - 1 < len(row)
+                    else ""
+                )
+                intent = (
+                    classify_status(raw_message).attendance_intent
+                    if has_student
+                    else False
+                )
+                intent_values.append([intent])
+                row.extend([""] * (intent_column - len(row)))
+                row[intent_column - 1] = str(intent).upper()
+            sheet.update(
+                range_name=(
+                    f"{_column_letter(intent_column)}{header_row + 1}:"
+                    f"{_column_letter(intent_column)}{header_row + len(data_rows)}"
+                ),
+                values=intent_values,
+                value_input_option="RAW",
+            )
     return sheet, rows, header_row, columns
 
 
@@ -871,9 +939,10 @@ def update_ticket(ticket_id: str, actor_line_user_id: str, *, close: bool) -> bo
 def append_attendance_row(values: list[object]) -> bool:
     """Append attendance under the configured table headers."""
 
-    if len(values) != 6:
-        raise ValueError("Attendance rows must contain exactly six values.")
-    student_id, student_name, day, attendance_type, status, raw_message = values
+    if len(values) not in {6, 7}:
+        raise ValueError("Attendance rows must contain six or seven values.")
+    student_id, student_name, day, attendance_type, status, raw_message = values[:6]
+    attendance_intent = values[6] if len(values) == 7 else False
     if not str(student_id).strip() or not str(student_name).strip():
         raise ValueError("Attendance rows require both Work ID and student name.")
 
@@ -891,6 +960,7 @@ def append_attendance_row(values: list[object]) -> bool:
             "type": attendance_type,
             "status": status,
             "raw_message": raw_message,
+            "attendance_intent": attendance_intent,
         },
     )
     last_data_row = header_row

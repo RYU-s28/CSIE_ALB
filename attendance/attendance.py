@@ -35,6 +35,7 @@ class AttendanceRecord:
     confidence: float = 1.0
     matched_keyword: str | None = None
     is_manual_override: bool = False
+    attendance_intent: bool = False
 
     def __post_init__(self) -> None:
         if self.status not in VALID_STATUSES:
@@ -76,6 +77,7 @@ class AttendanceTracker:
             attendance_date=attendance_date or date.today(),
             confidence=result.confidence,
             matched_keyword=result.matched_keyword,
+            attendance_intent=result.attendance_intent,
         )
 
         self._save(record)

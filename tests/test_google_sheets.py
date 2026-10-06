@@ -243,6 +243,7 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
         class SheetStub:
             def __init__(self) -> None:
                 self.updated = None
+                self.updates = []
 
             def get_all_values(self, pad_values=False):
                 return [
@@ -258,6 +259,7 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
 
             def update(self, *, range_name, values, value_input_option) -> None:
                 self.updated = (range_name, values, value_input_option)
+                self.updates.append(self.updated)
 
         sheet = SheetStub()
         values = [
@@ -267,6 +269,7 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
             "病假",
             "Confirmed",
             "Sick leave",
+            True,
         ]
         with (
             mock.patch.object(
@@ -283,7 +286,11 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
             appended = google_sheets.append_attendance_row(values)
 
         self.assertTrue(appended)
-        self.assertEqual(sheet.updated, ("B9:G9", [values], "RAW"))
+        self.assertEqual(sheet.updated, ("B9:H9", [values], "RAW"))
+        self.assertEqual(
+            sheet.updates[0],
+            ("H4:H4", [["attendance_intent"]], "RAW"),
+        )
 
     def test_attendance_header_scan_finds_legacy_table_position(self) -> None:
         import database.google_sheets as google_sheets
@@ -304,6 +311,42 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
         self.assertEqual(
             google_sheets._find_attendance_table(sheet),
             "B4:G4",
+        )
+
+    def test_legacy_pending_absence_is_backfilled_with_intent(self) -> None:
+        import database.google_sheets as google_sheets
+
+        class SheetStub:
+            def __init__(self) -> None:
+                self.updates = []
+
+            def get_all_values(self, pad_values=False):
+                return [
+                    ["Work ID", "Name", "Date", "Type", "Status", "Raw Message"],
+                    [
+                        "S1",
+                        "Student One",
+                        "2026-10-10",
+                        "待確認",
+                        "Pending",
+                        "I will not be working today because of a migraine",
+                    ],
+                ]
+
+            def update(self, *, range_name, values, value_input_option):
+                self.updates.append((range_name, values, value_input_option))
+
+        sheet = SheetStub()
+        with (
+            mock.patch.object(google_sheets, "ensure_attendance_sheet", return_value=sheet),
+            mock.patch.object(google_sheets, "ATTENDANCE_TABLE_RANGE", "A1:F1"),
+        ):
+            records = google_sheets.get_attendance_rows(date(2026, 10, 10))
+
+        self.assertEqual(records[0]["attendance_intent"], "TRUE")
+        self.assertIn(
+            ("G2:G2", [[True]], "RAW"),
+            sheet.updates,
         )
 
     def test_attendance_append_requires_work_id_and_name(self) -> None:
@@ -396,7 +439,7 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "UPDATE")
         self.assertEqual(result["old_status"], "病假")
-        self.assertEqual(sheet.updated[0], "A2:F2")
+        self.assertEqual(sheet.updated[0], "A2:G2")
         self.assertEqual(sheet.updated[1][0][3], "事假")
 
     def test_student_leave_removal_is_restricted_to_leave_rows(self) -> None:
@@ -408,6 +451,9 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
                     ["Work ID", "Name", "Date", "Type", "Status", "Raw Message"],
                     ["S1", "Student One", "2026-10-10", "遲到", "Confirmed", ""],
                 ]
+
+            def update(self, *, range_name, values, value_input_option):
+                pass
 
         with (
             mock.patch.object(google_sheets, "ensure_attendance_sheet", return_value=SheetStub()),

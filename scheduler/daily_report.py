@@ -46,6 +46,8 @@ def generate_daily_report(report_date: date | None = None) -> str:
             status=SHEET_STATUS_TO_INTERNAL.get(row.get("type", ""), "unknown"),
             message=row.get("raw_message", ""),
             attendance_date=target_date,
+            attendance_intent=row.get("attendance_intent", "").strip().lower()
+            in {"true", "1", "yes"},
         )
         for row in latest_by_student.values()
     ]

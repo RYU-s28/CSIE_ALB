@@ -8,11 +8,16 @@ Set `GOOGLE_SERVICE_ACCOUNT_JSON` to the service account credentials JSON and
 account's email address, with edit access.
 
 The bot writes attendance to the `Attendance` worksheet, with columns
-`student_id`, `name`, `date`, `type`, `status`, and `raw_message`. It creates
+`student_id`, `name`, `date`, `type`, `status`, `raw_message`, and
+`attendance_intent`. It creates
 this worksheet and its header row if they do not exist. For an existing workbook
 with a populated `Logs` tab and an empty `Attendance` tab, it continues writing
-to the `Logs` table at `B4:G` so existing log data remains connected. The
-`Monthly Report` worksheet is not modified by the bot.
+to the `Logs` table at `B4:H` so existing log data remains connected. The
+`attendance_intent` field is added to existing attendance tables when needed
+and backfilled from existing message text when possible. It marks unclear
+absence messages separately from their `待確認` type. These pending absences
+are excluded from the report's present count. The `Monthly Report` worksheet
+is not modified by the bot.
 
 The bot reads the existing `Students` worksheet and registers first-contact
 LINE accounts in place. Keep its columns named `Student ID`, `Chinese Name`,

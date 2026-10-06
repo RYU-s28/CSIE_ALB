@@ -70,6 +70,10 @@ def build_report(
         len(grouped.get(status, ()))
         for status in ABSENT_STATUSES
     )
+    absent_count += sum(
+        record.status == "unknown" and record.attendance_intent
+        for record in records
+    )
     present_count = max(0, expected_count - absent_count)
     lines = [
         f"「{report_date:%Y/%m/%d}」（禮拜{WEEKDAY_LABELS[report_date.weekday()]}）",

@@ -88,6 +88,7 @@ class AttendanceReportTests(unittest.TestCase):
         report = build_report(
             report_date=date(2026, 10, 6),
             total_students=2,
+            expected_students=2,
             records=[
                 AttendanceRecord(
                     student_id="1",
@@ -99,6 +100,30 @@ class AttendanceReportTests(unittest.TestCase):
 
         self.assertNotIn("出席", report)
         self.assertIn("待確認：1人\n@1", report)
+        self.assertIn("實到人數：2", report)
+
+    def test_pending_absence_intent_is_excluded_from_present_count(self) -> None:
+        report = build_report(
+            report_date=date(2026, 10, 6),
+            total_students=3,
+            expected_students=3,
+            records=[
+                AttendanceRecord(
+                    student_id="1",
+                    status="unknown",
+                    attendance_date=date(2026, 10, 6),
+                    attendance_intent=True,
+                ),
+                AttendanceRecord(
+                    student_id="2",
+                    status="unknown",
+                    attendance_date=date(2026, 10, 6),
+                ),
+            ],
+        )
+
+        self.assertIn("實到人數：2", report)
+        self.assertIn("待確認：2人", report)
 
 
 if __name__ == "__main__":

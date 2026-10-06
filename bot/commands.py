@@ -127,6 +127,8 @@ def _records_for_date(target_date: date) -> list[AttendanceRecord]:
                 status=internal_status,
                 message=row.get("raw_message", ""),
                 attendance_date=target_date,
+                attendance_intent=row.get("attendance_intent", "").strip().lower()
+                in {"true", "1", "yes"},
             )
         )
     return records

@@ -49,6 +49,32 @@ class DailyReportTests(unittest.TestCase):
 
         generate.assert_not_called()
 
+    def test_pending_absence_intent_is_not_reported_as_present(self) -> None:
+        with (
+            mock.patch.object(
+                daily_report,
+                "get_report_students",
+                return_value=({"S1": mock.Mock(line_label="杜榮瑪")}, 1),
+            ),
+            mock.patch.object(
+                daily_report,
+                "get_attendance_rows",
+                return_value=[
+                    {
+                        "student_id": "S1",
+                        "type": "待確認",
+                        "status": "Pending",
+                        "attendance_intent": "TRUE",
+                        "raw_message": "I will not be working today because of a migraine",
+                    }
+                ],
+            ),
+        ):
+            report = daily_report.generate_daily_report(date(2026, 10, 10))
+
+        self.assertIn("實到人數：0", report)
+        self.assertIn("待確認：1人", report)
+
 
 if __name__ == "__main__":
     unittest.main()

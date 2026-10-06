@@ -87,10 +87,19 @@ def _admin_ids() -> set[str]:
         raw_ids = raw_ids.partition("=")[2].strip()
     raw_ids = raw_ids.strip("[]")
     return {
-        item.strip().strip("'\"")
+        item.strip().strip("'\"").strip()
         for item in re.split(r"[,;\s]+", raw_ids)
         if item.strip().strip("'\"")
     }
+
+
+def is_admin_user(user_id: str | None) -> bool:
+    """Check the sender's permanent LINE user ID against configured admins."""
+
+    if not user_id:
+        return False
+    normalized_user_id = str(user_id).strip().strip("'\"").strip()
+    return bool(normalized_user_id and normalized_user_id in _admin_ids())
 
 
 def _records_for_date(target_date: date) -> list[AttendanceRecord]:
@@ -304,7 +313,7 @@ def handle_command(
     command_word, separator, raw_args = command_text.partition(" ")
     command_name = command_word.lower()
     admins = _admin_ids()
-    is_admin = bool(user_id and user_id in admins)
+    is_admin = is_admin_user(user_id)
     try:
         if command_name == "ticket" and not is_admin:
             tokens = [command_name, raw_args.strip()] if separator and raw_args.strip() else [command_name]
@@ -317,24 +326,31 @@ def handle_command(
     command = tokens[0].lower()
     args = tokens[1:]
 
-    if command in DISABLED_PUBLIC_COMMANDS:
-        return "That public command has been removed. Use .hello to see student commands."
-
     admin_ticket_action = (
         command == "ticket"
         and is_admin
         and bool(args)
         and args[0].lower() in {"close", "show", "reopen"}
     )
-    if command in ADMIN_COMMANDS or (is_admin and admin_ticket_action):
+    admin_command_request = (
+        command in ADMIN_COMMANDS
+        or admin_ticket_action
+        or command == "help"
+    )
+    if admin_command_request:
         if not is_admin:
             print(
                 "ADMIN AUTH DENIED:",
                 f"command={command}",
-                f"sender_id_present={bool(user_id)}",
+                f"incoming_user_id={user_id!r}",
                 "sender_matches_admin_id=False",
                 f"configured_admin_count={len(admins)}",
             )
+            if command == "help":
+                return (
+                    "That public command has been removed. "
+                    "Use .hello to see student commands."
+                )
             if not admins:
                 return (
                     "Admin access is not configured in this running bot. "
@@ -342,15 +358,21 @@ def handle_command(
                 )
             return "This command is available to administrators only."
         print(
-            "ADMIN AUTHORIZED:",
+                "ADMIN AUTH CHECK:",
             f"command={command}",
-            "sender_matches_admin_id=True",
+                f"incoming_user_id={user_id!r}",
+                "sender_matches_admin_id=True",
+                f"configured_admin_count={len(admins)}",
         )
         try:
-            return _run_admin_command(tokens, user_id)
+                admin_tokens = ["adminhelp", *args] if command == "help" else tokens
+                return _run_admin_command(admin_tokens, user_id)
         except (RuntimeError, ValueError) as error:
-            print("ADMIN COMMAND ERROR:", repr(error))
-            return "The command could not be completed. Please check its arguments or contact an administrator."
+                print("ADMIN COMMAND ERROR:", repr(error))
+                return "The command could not be completed. Please check its arguments or contact an administrator."
+
+    if command in DISABLED_PUBLIC_COMMANDS:
+        return "That public command has been removed. Use .hello to see student commands."
 
     if command == "hello":
         return (

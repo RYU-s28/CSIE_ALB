@@ -55,6 +55,23 @@ class HandleCommandTests(unittest.TestCase):
                 "Pong! Attendance bot is online.",
             )
 
+    def test_admin_match_trims_incoming_line_id_and_admin_help_routes_first(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"ADMIN_LINE_USER_IDS": "Uad570f7ac10f300ae23c2cd0a613719d"},
+        ):
+            self.assertTrue(
+                commands.is_admin_user(" Uad570f7ac10f300ae23c2cd0a613719d ")
+            )
+            response = handle_command(
+                ".help",
+                self.tracker,
+                "Uad570f7ac10f300ae23c2cd0a613719d",
+            )
+
+        self.assertIn(".adminhelp", response)
+        self.assertNotIn("public command has been removed", response)
+
     def test_missing_admin_variable_returns_deployment_hint(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
             response = handle_command(".ping", self.tracker, "Uadmin")

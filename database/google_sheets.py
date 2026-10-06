@@ -123,7 +123,28 @@ def ensure_sheet_state():
 def _normalize_header_name(value: str) -> str:
     """Normalize a sheet header for lookup and comparison."""
 
-    return "".join(ch.lower() if ch.isalnum() else "_" for ch in str(value).strip()).strip("_")
+    normalized = "".join(
+        ch.lower() if ch.isalnum() else "_" for ch in str(value).strip()
+    )
+    normalized = normalized.replace("__", "_")
+    return normalized.strip("_")
+
+
+HEADER_ALIASES = {
+    "work_id": "student_id",
+    "student_id": "student_id",
+    "id": "student_id",
+    "chinese_name": "name",
+    "name": "name",
+    "full_name": "name",
+    "line_display_name": "display_name",
+    "display_name": "display_name",
+    "line_user_id": "line_user_id",
+    "user_id": "line_user_id",
+    "line_uid": "line_user_id",
+    "active": "active",
+    "status": "active",
+}
 
 
 def _read_sheet_records(
@@ -161,8 +182,10 @@ def _read_sheet_records(
         name = _normalize_header_name(cell)
         if not name:
             continue
-        if name not in {existing_name for _, existing_name in header_positions}:
-            header_positions.append((i, name))
+
+        canonical_name = HEADER_ALIASES.get(name, name)
+        if canonical_name not in {existing_name for _, existing_name in header_positions}:
+            header_positions.append((i, canonical_name))
 
     records: list[dict[str, object]] = []
     for row in rows[header_row_idx + 1:]:
@@ -189,7 +212,7 @@ def _read_students_records() -> list[dict[str, object]]:
 
     return _read_sheet_records(
         students_sheet,
-        required_headers=("student_id", "name", "line_user_id", "active"),
+        required_headers=("student_id", "name", "line_user_id", "active", "display_name"),
     )
 
 

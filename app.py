@@ -18,9 +18,7 @@ from linebot.v3.webhooks import (
 )
 
 from attendance.attendance import AttendanceTracker
-from datetime import date
-from attendance.report import build_report
-from bot.commands import get_command_response, normalize_command
+from bot.commands import handle_command
 
 
 # --------------------------------------------------
@@ -142,197 +140,17 @@ def handle_message(event):
         None,
     )
 
-    normalized_text = normalize_command(text)
-
     print("------------------------------")
     print("USER:", user_id)
     print("GROUP:", group_id)
     print("MESSAGE:", text)
 
-    command_response = get_command_response(text)
+    command_response = handle_command(text, tracker, user_id)
     if command_response is not None:
         reply_to_line(
             event.reply_token,
             command_response,
         )
-        return
-
-    # --------------------------------------------------
-    # /ping
-    # --------------------------------------------------
-
-    if normalized_text == "ping":
-        reply_to_line(
-            event.reply_token,
-            "Pong! Attendance bot is online ✅"
-        )
-        return
-
-    # --------------------------------------------------
-    # /statusme
-    # Show this user's current status
-    # --------------------------------------------------
-
-    if normalized_text == "statusme":
-        record = tracker.get_record(user_id)
-
-        if not record:
-            reply_to_line(
-                event.reply_token,
-                "No attendance record found for you today."
-            )
-            return
-
-        message = (
-            f"Your current status:\n"
-            f"{record.status}\n"
-            f"Confidence: {record.confidence:.0%}\n"
-            f"Keyword: {record.matched_keyword or 'None'}"
-        )
-
-        reply_to_line(
-            event.reply_token,
-            message,
-        )
-
-        return
-
-    # --------------------------------------------------
-    # /summary
-    # --------------------------------------------------
-
-    if normalized_text == "summary":
-        summary = tracker.get_summary()
-
-        message = (
-            "📊 Today's Attendance Summary\n\n"
-            f"✅ Present: {summary.get('present', 0)}\n"
-            f"⏰ Late: {summary.get('late', 0)}\n"
-            f"🤒 Sick leave: {summary.get('sick_leave', 0)}\n"
-            f"📋 Personal leave: {summary.get('personal_leave', 0)}\n"
-            f"🌸 Menstrual leave: {summary.get('menstrual_leave', 0)}\n"
-            f"✈️ Abroad: {summary.get('abroad', 0)}\n"
-            f"❓ Unknown: {summary.get('unknown', 0)}"
-        )
-
-        reply_to_line(
-            event.reply_token,
-            message,
-        )
-
-        return
-
-    # --------------------------------------------------
-    # /report
-    # Build the full attendance report text and send immediately
-    # --------------------------------------------------
-
-    if normalized_text == "report":
-        records = tracker.get_records_for_date()
-
-        total_students = len({r.student_id for r in records})
-
-        report = build_report(
-            report_date=date.today(),
-            total_students=total_students,
-            records=records,
-        )
-
-        reply_to_line(
-            event.reply_token,
-            report,
-        )
-
-        return
-
-    # --------------------------------------------------
-    # /absent
-    # --------------------------------------------------
-
-    if normalized_text == "absent":
-        absent_statuses = {
-            "sick_leave",
-            "personal_leave",
-            "menstrual_leave",
-            "abroad",
-        }
-
-        records = tracker.get_records_for_date()
-
-        absent_records = [
-            record
-            for record in records
-            if record.status in absent_statuses
-        ]
-
-        if not absent_records:
-            reply_to_line(
-                event.reply_token,
-                "No absent students recorded today."
-            )
-            return
-
-        lines = ["❌ Currently absent:"]
-
-        for record in absent_records:
-            lines.append(
-                f"{record.student_id} — {record.status}"
-            )
-
-        reply_to_line(
-            event.reply_token,
-            "\n".join(lines),
-        )
-
-        return
-
-    # --------------------------------------------------
-    # /status
-    # Show everything currently stored
-    # --------------------------------------------------
-
-    if normalized_text == "status":
-        records = tracker.get_records_for_date()
-
-        if not records:
-            reply_to_line(
-                event.reply_token,
-                "No attendance records stored for today."
-            )
-            return
-
-        lines = [
-            "📋 Current attendance records",
-            ""
-        ]
-
-        for record in records:
-            lines.append(
-                f"{record.student_id}\n"
-                f"→ {record.status} "
-                f"({record.confidence:.0%})"
-            )
-
-        reply_to_line(
-            event.reply_token,
-            "\n".join(lines),
-        )
-
-        return
-
-    # --------------------------------------------------
-    # /clear
-    # Development only!
-    # --------------------------------------------------
-
-    if normalized_text == "clear":
-        tracker.clear_date(date.today())
-
-        reply_to_line(
-            event.reply_token,
-            "Today's attendance records cleared."
-        )
-
         return
 
     # --------------------------------------------------

@@ -2,13 +2,13 @@
 
 from flask import Flask, jsonify, request
 
+from attendance.attendance import AttendanceTracker
 from bot.commands import handle_command
-from bot.line_client import LineClient
 
 
 def create_app() -> Flask:
     app = Flask(__name__)
-    line_client = LineClient()
+    tracker = AttendanceTracker()
 
     @app.get("/")
     def health() -> tuple[dict, int]:
@@ -19,7 +19,7 @@ def create_app() -> Flask:
         payload = request.get_json(silent=True) or {}
         if payload.get("type") == "message":
             text = payload.get("message", {}).get("text", "")
-            reply_text = handle_command(text, line_client)
+            reply_text = handle_command(text, tracker, payload.get("user_id"))
             return jsonify({"status": "ok", "reply": reply_text}), 200
         return jsonify({"status": "ok"}), 200
 

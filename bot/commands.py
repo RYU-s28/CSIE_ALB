@@ -77,7 +77,8 @@ def _parse_date(value: str | None, *, default: date | None = None) -> date:
 
 
 def _format_student(student: dict[str, object]) -> str:
-    return f"{student.get('student_id', '')} {student.get('name', '')}".strip()
+    name = student.get("chinese_name") or student.get("name", "")
+    return f"{student.get('student_id', '')} {name}".strip()
 
 
 def _admin_ids() -> set[str]:
@@ -174,7 +175,7 @@ def _run_admin_command(tokens: list[str], actor: str) -> str:
         target_date = _parse_date(args[2] if len(args) == 3 else None)
         old = google_sheets.upsert_attendance_record(
             str(student["student_id"]),
-            str(student["name"]),
+            str(student.get("chinese_name") or student["name"]),
             target_date,
             status,
             actor,
@@ -223,7 +224,11 @@ def _run_admin_command(tokens: list[str], actor: str) -> str:
             current += timedelta(days=1)
         for work_date in dates:
             google_sheets.upsert_attendance_record(
-                student_id, str(student["name"]), work_date, status, actor,
+                student_id,
+                str(student.get("chinese_name") or student["name"]),
+                work_date,
+                status,
+                actor,
                 raw_message="Admin range update",
                 audit_details=f"range:{batch_id}",
             )

@@ -406,18 +406,35 @@ def handle_message(event):
             )
             return
 
+        student_work_id = str(student.get("student_id", "")).strip()
+        student_name = str(
+            student.get("chinese_name") or student.get("name") or ""
+        ).strip()
+        if not student_work_id or not student_name:
+            print(
+                "STUDENT ROSTER IDENTITY ERROR:",
+                f"work_id_present={bool(student_work_id)}",
+                f"chinese_name_present={bool(student_name)}",
+            )
+            reply_to_line(
+                event.reply_token,
+                "Your student record is missing its Work ID or Chinese Name. "
+                "Please ask an administrator to check the Students sheet.",
+            )
+            return
+
         matched_by_line_user_id = True
         classification = classify_status(text)
         attendance_date = parse_attendance_date(text)
         record = tracker.add_from_message(
-            student_id=str(student["student_id"]),
+            student_id=student_work_id,
             message=text,
             attendance_date=attendance_date,
         )
 
         if not append_attendance_row([
             record.student_id,
-            str(student["name"]),
+            student_name,
             record.attendance_date.isoformat(),
             LEAVE_TYPE_LABELS[record.status],
             "Confirmed"
@@ -434,7 +451,7 @@ def handle_message(event):
 
         reply_to_line(
             event.reply_token,
-            f"Attendance saved for {student['name']}: "
+            f"Attendance saved for {student_name}: "
             f"{LEAVE_TYPE_LABELS[record.status]} on "
             f"{record.attendance_date.isoformat()}.",
         )

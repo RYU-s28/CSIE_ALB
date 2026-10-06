@@ -124,21 +124,24 @@ def ensure_sheet_state():
     except WorksheetNotFound:
         logs_sheet = None
 
-    attendance_values = (
-        attendance_sheet.get_all_values()
-        if attendance_sheet is not None
-        else []
-    )
-    logs_header = logs_sheet.acell("B4").value if logs_sheet is not None else None
+    global ATTENDANCE_TABLE_RANGE
+    existing_table = None
+    for candidate_sheet in (attendance_sheet, logs_sheet):
+        if candidate_sheet is None:
+            continue
+        layout = _find_attendance_table(candidate_sheet)
+        if layout is not None:
+            existing_table = (candidate_sheet, layout)
+            break
 
-    if attendance_sheet is not None and len(attendance_values) > 1:
-        global ATTENDANCE_TABLE_RANGE
-        ATTENDANCE_TABLE_RANGE = "A1:F1"
-    elif logs_sheet is not None and logs_header:
-        attendance_sheet = logs_sheet
-        ATTENDANCE_TABLE_RANGE = "B4:G4"
+    if existing_table is not None:
+        attendance_sheet, ATTENDANCE_TABLE_RANGE = existing_table
     elif attendance_sheet is not None:
         ATTENDANCE_TABLE_RANGE = "A1:F1"
+        attendance_sheet.append_row(
+            ATTENDANCE_HEADERS,
+            value_input_option="RAW",
+        )
     elif logs_sheet is not None:
         attendance_sheet = logs_sheet
         ATTENDANCE_TABLE_RANGE = "B4:G4"
@@ -160,6 +163,39 @@ def ensure_sheet_state():
         )
 
     return spreadsheet
+
+
+def _find_attendance_table(sheet) -> str | None:
+    """Find a row containing the expected attendance headers in any columns."""
+
+    required = {"student_id", "name", "date", "type", "status", "raw_message"}
+    aliases = {
+        "work_id": "student_id",
+        "student_id": "student_id",
+        "name": "name",
+        "date": "date",
+        "type": "type",
+        "status": "status",
+        "raw_message": "raw_message",
+        "rawmessage": "raw_message",
+    }
+    for row_number, row in enumerate(sheet.get_all_values(), start=1):
+        found_columns = [
+            index
+            for index, value in enumerate(row)
+            if aliases.get(_normalize_header_name(value), _normalize_header_name(value))
+            in required
+        ]
+        found_headers = {
+            aliases.get(_normalize_header_name(row[index]), _normalize_header_name(row[index]))
+            for index in found_columns
+        }
+        if required.issubset(found_headers):
+            return (
+                f"{_column_letter(min(found_columns) + 1)}{row_number}:"
+                f"{_column_letter(max(found_columns) + 1)}{row_number}"
+            )
+    return None
 
 
 def _normalize_header_name(value: str) -> str:
@@ -310,7 +346,9 @@ def find_student_by_line_user_id(line_user_id: str) -> dict[str, object] | None:
             and _is_student_active(record)
         ):
             result = _student_identity(record)
-            result.update(identity)
+            result["student_id"] = identity["student_id"]
+            if identity["name"]:
+                result["name"] = identity["name"]
             return result
     return None
 
@@ -445,6 +483,22 @@ def _attendance_header_layout():
     return sheet, rows, header_row, columns
 
 
+def _attendance_row_values(
+    columns: dict[str, int],
+    values_by_header: dict[str, object],
+) -> list[object]:
+    """Order values by the worksheet's actual attendance header positions."""
+
+    first_column = min(columns.values())
+    last_column = max(columns.values())
+    values: list[object] = [""] * (last_column - first_column + 1)
+    for header, value in values_by_header.items():
+        column = columns.get(header)
+        if column is not None:
+            values[column - first_column] = value
+    return values
+
+
 def get_attendance_rows(target_date: date | None = None) -> list[dict[str, str]]:
     """Read attendance entries, optionally filtered to one date."""
 
@@ -536,14 +590,14 @@ def upsert_attendance_record(
     sheet, _, _, columns = _attendance_header_layout()
     previous = get_attendance_record(student_id, target_date)
     old_status = previous.get("type", "") if previous else ""
-    row = [
-        student_id,
-        student_name,
-        target_date.isoformat(),
-        status,
-        "Confirmed",
-        raw_message,
-    ]
+    values_by_header = {
+        "student_id": student_id,
+        "name": student_name,
+        "date": target_date.isoformat(),
+        "type": status,
+        "status": "Confirmed",
+        "raw_message": raw_message,
+    }
     action = "UPDATE" if previous else "INSERT"
     action_id = _append_audit(
         actor_line_user_id,
@@ -559,7 +613,7 @@ def upsert_attendance_record(
             row_number = int(previous["_row_number"])
             first_column = min(columns.values())
             last_column = max(columns.values())
-            values = row[:last_column - first_column + 1]
+            values = _attendance_row_values(columns, values_by_header)
             sheet.update(
                 range_name=f"{_column_letter(first_column)}{row_number}:{_column_letter(last_column)}{row_number}",
                 values=[values],
@@ -567,7 +621,7 @@ def upsert_attendance_record(
             )
         else:
             sheet.append_row(
-                row,
+                _attendance_row_values(columns, values_by_header),
                 value_input_option="RAW",
                 table_range=ATTENDANCE_TABLE_RANGE,
             )
@@ -799,12 +853,30 @@ def update_ticket(ticket_id: str, actor_line_user_id: str, *, close: bool) -> bo
 def append_attendance_row(values: list[object]) -> bool:
     """Append attendance under the configured table headers."""
 
+    if len(values) != 6:
+        raise ValueError("Attendance rows must contain exactly six values.")
+    student_id, student_name, day, attendance_type, status, raw_message = values
+    if not str(student_id).strip() or not str(student_name).strip():
+        raise ValueError("Attendance rows require both Work ID and student name.")
+
     sheet = ensure_attendance_sheet()
     if sheet is None:
         return False
 
+    _, _, _, columns = _attendance_header_layout()
+    ordered_values = _attendance_row_values(
+        columns,
+        {
+            "student_id": student_id,
+            "name": student_name,
+            "date": day,
+            "type": attendance_type,
+            "status": status,
+            "raw_message": raw_message,
+        },
+    )
     sheet.append_row(
-        values,
+        ordered_values,
         value_input_option="RAW",
         table_range=ATTENDANCE_TABLE_RANGE,
     )

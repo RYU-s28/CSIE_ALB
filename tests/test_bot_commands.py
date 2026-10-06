@@ -34,7 +34,7 @@ class HandleCommandTests(unittest.TestCase):
     def test_attendance_commands_are_handled(self) -> None:
         commands = {
             "statusme": "No attendance record found for you today.",
-            "summary": "Today's Attendance Summary",
+            "summary": "應到人數：0",
             "absent": "No absent students recorded today.",
             "status": "No attendance records stored for today.",
             "clear": "Today's attendance records cleared.",
@@ -49,6 +49,30 @@ class HandleCommandTests(unittest.TestCase):
         self.assertTrue(
             handle_command("report", self.tracker, "student-1")
         )
+
+    def test_summary_and_report_share_class_report_format(self) -> None:
+        self.tracker.add_from_message("S1", "病假")
+        roster_names = {}
+
+        summary = handle_command(
+            "/summary",
+            self.tracker,
+            report_students=roster_names,
+            expected_students=10,
+        )
+        report = handle_command(
+            "/report",
+            self.tracker,
+            report_students=roster_names,
+            expected_students=10,
+        )
+
+        self.assertIn("應到人數：10", summary)
+        self.assertIn("實到人數：9", summary)
+        self.assertIn("病假：1人", summary)
+        self.assertNotIn("回菲律賓", summary)
+        self.assertIn("病假：1人", report)
+        self.assertIn("應到人數：10", report)
 
     def test_unknown_text_is_not_a_command(self) -> None:
         self.assertIsNone(handle_command("I am present", self.tracker))

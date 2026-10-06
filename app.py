@@ -25,10 +25,11 @@ from attendance.leave_message import (
 )
 from bot.commands import handle_command, normalize_command
 from database.google_sheets import (
-    ensure_attendance_sheet,
+    append_attendance_row,
     find_students_by_display_name,
     find_student_by_line_user_id,
     LineRegistrationConflictError,
+    get_report_students,
     register_line_user,
 )
 
@@ -324,11 +325,21 @@ def handle_message(event):
         except Exception as error:
             print("STUDENT LOOKUP ERROR:", repr(error))
 
+    report_students = None
+    expected_students = None
+    if normalize_command(text) in {"summary", "report"}:
+        try:
+            report_students, expected_students = get_report_students()
+        except Exception as error:
+            print("REPORT ROSTER LOOKUP ERROR:", repr(error))
+
     command_response = handle_command(
         text,
         tracker,
         user_id,
         student_id=command_student_id,
+        report_students=report_students,
+        expected_students=expected_students,
     )
     if command_response is not None:
         reply_to_line(
@@ -396,16 +407,7 @@ def handle_message(event):
             attendance_date=attendance_date,
         )
 
-        attendance_sheet = ensure_attendance_sheet()
-        if attendance_sheet is None:
-            reply_to_line(
-                event.reply_token,
-                "Google Sheets is not configured yet. Please contact an administrator.",
-            )
-            print("Attendance write skipped because spreadsheet config is unavailable.")
-            return
-
-        attendance_sheet.append_row([
+        if not append_attendance_row([
             record.student_id,
             str(student["name"]),
             record.attendance_date.isoformat(),
@@ -414,7 +416,13 @@ def handle_message(event):
             if classification.status != "unknown" and matched_by_line_user_id
             else "Pending",
             record.message,
-        ], value_input_option="RAW")
+        ]):
+            reply_to_line(
+                event.reply_token,
+                "Google Sheets is not configured yet. Please contact an administrator.",
+            )
+            print("Attendance write skipped because spreadsheet config is unavailable.")
+            return
 
         reply_to_line(
             event.reply_token,

@@ -30,6 +30,8 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
         "doctor",
         "hospital",
         "sick",
+        "body ache",
+        "body pain",
         "fever",
         "not feeling well",
         "feeling unwell",
@@ -54,6 +56,8 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
         "月經",
         "menstrual leave",
         "period pain",
+        "period cramps",
+        "period discomfort",
     ),
     "abroad": (
         "回國",

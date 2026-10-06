@@ -173,6 +173,89 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
 
         self.assertEqual(matches, [])
 
+    def test_attendance_append_uses_logs_table_range(self) -> None:
+        import database.google_sheets as google_sheets
+
+        class SheetStub:
+            def __init__(self) -> None:
+                self.appended = None
+
+            def append_row(self, values, **kwargs) -> None:
+                self.appended = (values, kwargs)
+
+        sheet = SheetStub()
+        values = ["S06516", "Romel R. Duran Jr.", "2026-10-06", "病假", "Confirmed", "Sick leave"]
+        with (
+            mock.patch.object(
+                google_sheets,
+                "ensure_attendance_sheet",
+                return_value=sheet,
+            ),
+            mock.patch.object(
+                google_sheets,
+                "ATTENDANCE_TABLE_RANGE",
+                "B4:G4",
+            ),
+        ):
+            appended = google_sheets.append_attendance_row(values)
+
+        self.assertTrue(appended)
+        self.assertEqual(
+            sheet.appended,
+            (
+                values,
+                {
+                    "value_input_option": "RAW",
+                    "table_range": "B4:G4",
+                },
+            ),
+        )
+
+    def test_attendance_append_returns_false_when_sheet_is_unavailable(self) -> None:
+        import database.google_sheets as google_sheets
+
+        with mock.patch.object(
+            google_sheets,
+            "ensure_attendance_sheet",
+            return_value=None,
+        ):
+            appended = google_sheets.append_attendance_row(["row"])
+
+        self.assertFalse(appended)
+
+    def test_report_roster_uses_display_name_and_active_roster_size(self) -> None:
+        import database.google_sheets as google_sheets
+
+        records = [
+            {
+                "student_id": "S1",
+                "display_name": "華凌智",
+                "full_name": "Student One",
+            },
+            {
+                "student_id": "S2",
+                "display_name": "倪瑪芮 HEART",
+                "full_name": "Student Two",
+                "active": "TRUE",
+            },
+            {
+                "student_id": "S3",
+                "display_name": "Inactive",
+                "active": "FALSE",
+            },
+        ]
+        with mock.patch.object(
+            google_sheets,
+            "_read_students_records",
+            return_value=records,
+        ):
+            students, expected_count = google_sheets.get_report_students()
+
+        self.assertEqual(expected_count, 2)
+        self.assertEqual(students["S1"].display_name, "華凌智")
+        self.assertEqual(students["S2"].display_name, "倪瑪芮 HEART")
+        self.assertNotIn("S3", students)
+
 
 if __name__ == "__main__":
     unittest.main()

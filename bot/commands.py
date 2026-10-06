@@ -3,7 +3,7 @@
 from datetime import date
 
 from attendance.attendance import AttendanceTracker
-from attendance.report import build_report
+from attendance.report import StudentDisplay, build_report
 
 
 COMMANDS = {
@@ -31,6 +31,8 @@ def handle_command(
     user_id: str | None = None,
     *,
     student_id: str | None = None,
+    report_students: dict[str, StudentDisplay] | None = None,
+    expected_students: int | None = None,
 ) -> str | None:
     command = normalize_command(text)
 
@@ -56,24 +58,28 @@ def handle_command(
             f"Keyword: {record.matched_keyword or 'None'}"
         )
     if command == "summary":
-        summary = tracker.get_summary()
-        return (
-            "📊 Today's Attendance Summary\n\n"
-            f"✅ Present: {summary.get('present', 0)}\n"
-            f"⏰ Late: {summary.get('late', 0)}\n"
-            f"🤒 Sick leave: {summary.get('sick_leave', 0)}\n"
-            f"📋 Personal leave: {summary.get('personal_leave', 0)}\n"
-            f"🌸 Menstrual leave: {summary.get('menstrual_leave', 0)}\n"
-            f"✈️ Abroad: {summary.get('abroad', 0)}\n"
-            f"❓ Unknown: {summary.get('unknown', 0)}"
-        )
-    if command == "report":
         records = tracker.get_records_for_date()
-        total_students = len({record.student_id for record in records})
+        total_students = expected_students
+        if total_students is None:
+            total_students = len({record.student_id for record in records})
         return build_report(
             report_date=date.today(),
             total_students=total_students,
             records=records,
+            students=report_students,
+            expected_students=expected_students,
+        )
+    if command == "report":
+        records = tracker.get_records_for_date()
+        total_students = expected_students
+        if total_students is None:
+            total_students = len({record.student_id for record in records})
+        return build_report(
+            report_date=date.today(),
+            total_students=total_students,
+            records=records,
+            students=report_students,
+            expected_students=expected_students,
         )
     if command == "absent":
         absent_statuses = {

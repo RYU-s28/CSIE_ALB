@@ -12,6 +12,7 @@ from attendance.student_directory import (
     find_student_by_line_user_id as find_student,
     find_students_by_display_name as find_display_name_matches,
 )
+from attendance.report import StudentDisplay
 
 
 load_dotenv()
@@ -305,6 +306,33 @@ def find_student_by_display_name(display_name: str) -> dict[str, object] | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def get_report_students() -> tuple[dict[str, StudentDisplay], int]:
+    """Return active roster display labels and expected student count."""
+
+    records = [
+        record
+        for record in _read_students_records()
+        if _is_student_active(record)
+    ]
+    students: dict[str, StudentDisplay] = {}
+    for record in records:
+        student_id = str(record.get("student_id", "")).strip()
+        if not student_id:
+            continue
+        display_name = str(
+            record.get("display_name")
+            or record.get("full_name")
+            or record.get("name")
+            or record.get("chinese_name")
+            or student_id
+        ).strip()
+        students[student_id] = StudentDisplay(
+            student_id=student_id,
+            display_name=display_name,
+        )
+    return students, len(students)
+
+
 def register_line_user(
     student_row: dict[str, object],
     line_user_id: str,
@@ -338,3 +366,18 @@ def ensure_attendance_sheet():
 
     ensure_sheet_state()
     return attendance_sheet
+
+
+def append_attendance_row(values: list[object]) -> bool:
+    """Append attendance under the configured table headers."""
+
+    sheet = ensure_attendance_sheet()
+    if sheet is None:
+        return False
+
+    sheet.append_row(
+        values,
+        value_input_option="RAW",
+        table_range=ATTENDANCE_TABLE_RANGE,
+    )
+    return True

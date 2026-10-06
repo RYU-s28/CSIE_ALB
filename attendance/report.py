@@ -12,7 +12,7 @@ STATUS_LABELS = {
     "personal_leave": "事假",
     "sick_leave": "病假",
     "menstrual_leave": "經痛",
-    "abroad": "回國",
+    "abroad": "回菲律賓",
     "late": "遲到",
     "unknown": "待確認",
 }
@@ -66,7 +66,7 @@ def build_report(
     weekday = _weekday_zh(report_date)
 
     lines = [
-        f"{report_date:%Y/%m/%d}（{weekday}）",
+        f"「{report_date:%Y/%m/%d}」（{weekday}）",
         "",
         f"應到人數：{expected}",
         f"實到人數：{present}",
@@ -100,19 +100,17 @@ def build_report(
 
         lines.append("")
 
-    lines.append(f"回到學校：{present}")
-
     return "\n".join(lines).strip()
 
 
 def _weekday_zh(value: date) -> str:
     weekdays = (
-        "星期一",
-        "星期二",
-        "星期三",
-        "星期四",
-        "星期五",
-        "星期六",
-        "星期日",
+        "禮拜一",
+        "禮拜二",
+        "禮拜三",
+        "禮拜四",
+        "禮拜五",
+        "禮拜六",
+        "禮拜日",
     )
     return weekdays[value.weekday()]

@@ -17,11 +17,17 @@ from linebot.v3.webhooks import (
 )
 
 from attendance.attendance import AttendanceTracker
+from attendance.classifier import classify_status
+from attendance.leave_message import (
+    LEAVE_TYPE_LABELS,
+    parse_attendance_date,
+)
 from bot.commands import handle_command
 from database.google_sheets import (
+    ATTENDANCE_TABLE_RANGE,
     attendance_sheet,
-    students_sheet,
-    work_calendar_sheet,
+    find_student_by_display_name,
+    find_student_by_line_user_id,
 )
 
 
@@ -123,6 +129,33 @@ def reply_to_line(reply_token: str, message: str):
             "LINE REPLY ERROR:",
             repr(error),
         )
+
+
+def get_line_display_name(
+    user_id: str,
+    *,
+    group_id: str | None = None,
+    room_id: str | None = None,
+) -> str | None:
+    try:
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            if group_id:
+                profile = messaging_api.get_group_member_profile(
+                    group_id,
+                    user_id,
+                )
+            elif room_id:
+                profile = messaging_api.get_room_member_profile(
+                    room_id,
+                    user_id,
+                )
+            else:
+                profile = messaging_api.get_profile(user_id)
+        return profile.display_name
+    except Exception as error:
+        print("LINE PROFILE LOOKUP ERROR:", repr(error))
+        return None
         
 @handler.add(
     MessageEvent,
@@ -140,6 +173,11 @@ def handle_message(event):
     group_id = getattr(
         event.source,
         "group_id",
+        None,
+    )
+    room_id = getattr(
+        event.source,
+        "room_id",
         None,
     )
 
@@ -161,7 +199,11 @@ def handle_message(event):
     # --------------------------------------------------
 
     if not user_id:
-        print("No user ID found. Message ignored.")
+        reply_to_line(
+            event.reply_token,
+            "I couldn't identify your LINE account. Please contact an administrator.",
+        )
+        print("No user ID found. Message ignored; profile lookup requires a user ID.")
         return
 
     # --------------------------------------------------
@@ -169,20 +211,48 @@ def handle_message(event):
     # --------------------------------------------------
 
     try:
+        student = find_student_by_line_user_id(user_id)
+        matched_by_line_user_id = student is not None
+        if student is None:
+            display_name = get_line_display_name(
+                user_id,
+                group_id=group_id,
+                room_id=room_id,
+            )
+            if display_name:
+                student = find_student_by_display_name(display_name)
+                if student is not None:
+                    print(
+                        "Student matched by display name; requires review:",
+                        display_name,
+                    )
+
+        if student is None:
+            reply_to_line(
+                event.reply_token,
+                "Your LINE account could not be matched to a student record. Ask an administrator to check the Students sheet.",
+            )
+            print("Unmatched LINE user:", user_id)
+            return
+
+        classification = classify_status(text)
+        attendance_date = parse_attendance_date(text)
         record = tracker.add_from_message(
-            student_id=user_id,
+            student_id=student["student_id"],
             message=text,
+            attendance_date=attendance_date,
         )
 
         attendance_sheet.append_row([
-            record.created_at.isoformat(),
             record.student_id,
+            student["name"],
             record.attendance_date.isoformat(),
-            record.status,
+            LEAVE_TYPE_LABELS[record.status],
+            "Confirmed"
+            if classification.status != "unknown" and matched_by_line_user_id
+            else "Pending",
             record.message,
-            record.confidence,
-            record.matched_keyword or "",
-        ])
+        ], table_range=ATTENDANCE_TABLE_RANGE, value_input_option="RAW")
 
         print("CLASSIFICATION:", record.status)
         print("CONFIDENCE:", record.confidence)

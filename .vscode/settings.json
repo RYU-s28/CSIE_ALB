@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^python -m unittest discover -s tests && python -m py_compile app\\.py attendance/leave_message\\.py database/google_sheets\\.py && git diff --check$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

@@ -69,6 +69,24 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
         "back home",
         "returning home",
     ),
+    "no_bus": (
+        "不坐公交車",
+        "不坐公車",
+        "not taking the bus",
+        "no bus",
+    ),
+    "not_coming": (
+        "不出來",
+        "不來上班",
+        "不来上班",
+        "not coming to work",
+    ),
+    "cancelled_work": (
+        "取消工讀",
+        "取消打工",
+        "cancel work",
+        "cancelled work",
+    ),
     "late": (
         "遲到",
         "迟到",
@@ -134,6 +152,9 @@ def classify_status(message: str) -> ClassificationResult:
         "sick_leave",
         "personal_leave",
         "abroad",
+        "no_bus",
+        "not_coming",
+        "cancelled_work",
         "late",
     )
 
@@ -155,6 +176,11 @@ def classify_status(message: str) -> ClassificationResult:
         "生理假",
         "回國",
         "回菲律賓",
+        "不坐公交車",
+        "不坐公車",
+        "不出來",
+        "取消工讀",
+        "取消打工",
         "遲到",
         "迟到",
     }

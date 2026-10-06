@@ -55,3 +55,9 @@ include `sick`, `personal`, `leave`, `late`, and `pending`; the sheet stores
 canonical Chinese labels. `.range` writes only dates selected by the current
 work calendar. Tickets are stored in a `Tickets` worksheet, and administrative
 attendance changes are recorded in `Audit Log` for `.undo`.
+
+`.report`, `.summary`, and the scheduled report use the same roster format:
+date and weekday, expected and attending counts, followed only by non-empty
+attendance categories with each student's roster name. The attending count is
+the expected roster size minus students marked absent; "不坐公交車" is listed
+as a category but does not reduce attendance.

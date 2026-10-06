@@ -43,6 +43,15 @@ STATUS_ALIASES = {
     "回菲律賓": "回菲律賓",
     "回菲律滨": "回菲律賓",
     "abroad": "回菲律賓",
+    "不坐公交車": "不坐公交車",
+    "不坐公車": "不坐公交車",
+    "no bus": "不坐公交車",
+    "不出來": "不出來",
+    "不出来": "不出來",
+    "not coming": "不出來",
+    "取消工讀": "取消工讀",
+    "cancel work": "取消工讀",
+    "cancelled work": "取消工讀",
 }
 SHEET_STATUS_TO_INTERNAL = {
     value: key for key, value in LEAVE_TYPE_LABELS.items()
@@ -124,27 +133,16 @@ def _records_for_date(target_date: date) -> list[AttendanceRecord]:
 
 
 def _report_data(target_date: date, *, summary: bool) -> str:
+    del summary
     students, expected = google_sheets.get_report_students()
     records = _records_for_date(target_date)
-    if not summary:
-        return build_report(
-            report_date=target_date,
-            total_students=expected,
-            records=records,
-            students=students,
-            expected_students=expected,
-        )
-
-    counts: dict[str, int] = {}
-    for record in records:
-        if record.status == "present":
-            continue
-        label = LEAVE_TYPE_LABELS[record.status]
-        counts[label] = counts.get(label, 0) + 1
-    lines = [target_date.isoformat(), ""]
-    lines.extend(f"{label}: {count}" for label, count in counts.items())
-    lines.extend(["", f"Total exceptions: {sum(counts.values())}"])
-    return "\n".join(lines)
+    return build_report(
+        report_date=target_date,
+        total_students=expected,
+        records=records,
+        students=students,
+        expected_students=expected,
+    )
 
 
 def _run_admin_command(tokens: list[str], actor: str) -> str:

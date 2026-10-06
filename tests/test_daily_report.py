@@ -32,7 +32,11 @@ class DailyReportTests(unittest.TestCase):
 
         self.assertEqual(
             report,
-            "Attendance Report — 2026-10-10\n\n病假\n• 杜榮瑪",
+            "「2026/10/10」（禮拜六）\n\n"
+            "應到人數：1\n"
+            "實到人數：0\n\n"
+            "病假：1人\n"
+            "@杜榮瑪",
         )
 
     def test_daily_job_skips_push_without_destination_configuration(self) -> None:

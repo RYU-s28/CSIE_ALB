@@ -263,7 +263,13 @@ class HandleCommandTests(unittest.TestCase):
 
         self.assertEqual(
             summary,
-            "2026-10-10\n\n事假: 1\n遲到: 1\n\nTotal exceptions: 2",
+            "「2026/10/10」（禮拜六）\n\n"
+            "應到人數：12\n"
+            "實到人數：11\n\n"
+            "事假：1人\n"
+            "@S1\n\n"
+            "遲到：1人\n"
+            "@S2",
         )
 
     def test_student_ticket_creates_a_sheet_ticket(self) -> None:

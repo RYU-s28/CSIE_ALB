@@ -29,6 +29,18 @@ class AttendanceClassifierTests(unittest.TestCase):
         self.assertEqual(result.status, "sick_leave")
         self.assertGreaterEqual(result.confidence, 0.60)
 
+    def test_explicit_roster_attendance_categories_are_actionable(self) -> None:
+        cases = {
+            "不坐公交車": "no_bus",
+            "今天不出來": "not_coming",
+            "取消工讀": "cancelled_work",
+        }
+        for message, expected_status in cases.items():
+            with self.subTest(message=message):
+                result = classify_status(message)
+                self.assertEqual(result.status, expected_status)
+                self.assertGreaterEqual(result.confidence, 0.60)
+
     def test_casual_keyword_mentions_do_not_create_attendance(self) -> None:
         for message in (
             "Good morning everyone",

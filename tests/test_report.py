@@ -19,7 +19,7 @@ class AttendanceReportTests(unittest.TestCase):
                 ),
                 AttendanceRecord(
                     student_id="2",
-                    status="late",
+                    status="no_bus",
                     attendance_date=date(2026, 10, 6),
                 ),
                 AttendanceRecord(
@@ -37,17 +37,52 @@ class AttendanceReportTests(unittest.TestCase):
 
         self.assertEqual(
             report,
-            "Attendance Report — 2026-10-06\n\n"
-            "回菲律賓\n"
-            "• 華凌智\n\n"
-            "事假\n"
-            "• 言伊曼\n\n"
-            "遲到\n"
-            "• 倪瑪芮 HEART",
+            "「2026/10/06」（禮拜二）\n\n"
+            "應到人數：41\n"
+            "實到人數：39\n\n"
+            "回菲律賓：1人\n"
+            "@華凌智\n\n"
+            "不坐公交車：1人\n"
+            "@倪瑪芮 HEART\n\n"
+            "事假：1人\n"
+            "@言伊曼",
         )
         self.assertNotIn("病假", report)
         self.assertNotIn("經痛", report)
         self.assertNotIn("待確認", report)
+
+    def test_report_absent_count_excludes_no_bus_and_uses_expected_count(self) -> None:
+        report = build_report(
+            report_date=date(2026, 10, 6),
+            total_students=99,
+            expected_students=41,
+            records=[
+                AttendanceRecord(
+                    student_id="1",
+                    status="sick_leave",
+                    attendance_date=date(2026, 10, 6),
+                ),
+                AttendanceRecord(
+                    student_id="2",
+                    status="not_coming",
+                    attendance_date=date(2026, 10, 6),
+                ),
+                AttendanceRecord(
+                    student_id="3",
+                    status="cancelled_work",
+                    attendance_date=date(2026, 10, 6),
+                ),
+                AttendanceRecord(
+                    student_id="4",
+                    status="no_bus",
+                    attendance_date=date(2026, 10, 6),
+                ),
+            ],
+        )
+
+        self.assertIn("應到人數：41\n實到人數：38", report)
+        self.assertIn("不出來：1人\n@2", report)
+        self.assertIn("取消工讀：1人\n@3", report)
 
     def test_report_omits_students_with_no_exception_status(self) -> None:
         report = build_report(
@@ -63,7 +98,7 @@ class AttendanceReportTests(unittest.TestCase):
         )
 
         self.assertNotIn("出席", report)
-        self.assertIn("待確認\n• 1", report)
+        self.assertIn("待確認：1人\n@1", report)
 
 
 if __name__ == "__main__":

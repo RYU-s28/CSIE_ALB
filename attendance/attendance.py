@@ -16,6 +16,9 @@ VALID_STATUSES = {
     "personal_leave",
     "menstrual_leave",
     "abroad",
+    "no_bus",
+    "not_coming",
+    "cancelled_work",
     "unknown",
 }
 

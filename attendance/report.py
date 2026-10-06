@@ -13,9 +13,23 @@ STATUS_LABELS = {
     "sick_leave": "病假",
     "menstrual_leave": "經痛",
     "abroad": "回菲律賓",
+    "no_bus": "不坐公交車",
+    "not_coming": "不出來",
+    "cancelled_work": "取消工讀",
     "late": "遲到",
     "unknown": "待確認",
 }
+
+ABSENT_STATUSES = {
+    "personal_leave",
+    "sick_leave",
+    "menstrual_leave",
+    "abroad",
+    "not_coming",
+    "cancelled_work",
+}
+
+WEEKDAY_LABELS = ("一", "二", "三", "四", "五", "六", "日")
 
 @dataclass(slots=True)
 class StudentDisplay:
@@ -40,20 +54,38 @@ def build_report(
 ) -> str:
     """Build a text attendance report similar to the class LINE format."""
 
-    del total_students, expected_students
+    del total_students
     students = students or {}
     grouped: dict[str, list[AttendanceRecord]] = {}
 
     for record in records:
         grouped.setdefault(record.status, []).append(record)
 
-    lines = [f"Attendance Report — {report_date.isoformat()}", ""]
+    expected_count = (
+        expected_students
+        if expected_students is not None
+        else len(students)
+    )
+    absent_count = sum(
+        len(grouped.get(status, ()))
+        for status in ABSENT_STATUSES
+    )
+    present_count = max(0, expected_count - absent_count)
+    lines = [
+        f"「{report_date:%Y/%m/%d}」（禮拜{WEEKDAY_LABELS[report_date.weekday()]}）",
+        "",
+        f"應到人數：{expected_count}",
+        f"實到人數：{present_count}",
+    ]
 
     section_order = (
         "abroad",
+        "no_bus",
         "personal_leave",
         "sick_leave",
         "menstrual_leave",
+        "not_coming",
+        "cancelled_work",
         "late",
         "unknown",
     )
@@ -64,16 +96,14 @@ def build_report(
             continue
 
         label = STATUS_LABELS[status]
-        lines.append(label)
+        lines.extend(["", f"{label}：{len(status_records)}人"])
 
         for record in sorted(status_records, key=lambda item: item.student_id):
             student = students.get(record.student_id)
 
             if student:
-                lines.append(f"• {student.line_label}")
+                lines.append(f"@{student.line_label}")
             else:
-                lines.append(f"• {record.student_id}")
+                lines.append(f"@{record.student_id}")
 
-        lines.append("")
-
-    return "\n".join(lines).strip()
+    return "\n".join(lines)

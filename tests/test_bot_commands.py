@@ -29,8 +29,8 @@ class HandleCommandTests(unittest.TestCase):
                 response = handle_command(text, self.tracker, "Ustudent")
                 self.assertIn("removed", response)
         self.assertIn(
-            "administrators only",
-            handle_command(".ping", self.tracker, "Ustudent"),
+            "admin",
+            handle_command(".ping", self.tracker, "Ustudent").lower(),
         )
 
     def test_admin_commands_require_permanent_user_id_allowlist(self) -> None:
@@ -43,6 +43,23 @@ class HandleCommandTests(unittest.TestCase):
                 "administrators only",
                 handle_command(".ping", self.tracker, "Ustudent"),
             )
+
+    def test_admin_id_parser_handles_quoted_csv_and_environment_assignment(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"ADMIN_LINE_USER_IDS": 'ADMIN_LINE_USER_IDS="Uadmin, Usecond"'},
+        ):
+            self.assertEqual(commands._admin_ids(), {"Uadmin", "Usecond"})
+            self.assertEqual(
+                handle_command(".ping", self.tracker, "Uadmin"),
+                "Pong! Attendance bot is online.",
+            )
+
+    def test_missing_admin_variable_returns_deployment_hint(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            response = handle_command(".ping", self.tracker, "Uadmin")
+
+        self.assertIn("not configured in this running bot", response)
 
     def test_statusme_reads_student_record_by_id_and_date(self) -> None:
         with mock.patch.object(

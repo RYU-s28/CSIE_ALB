@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 from datetime import date, datetime, timedelta
 from json import loads
@@ -80,10 +81,14 @@ def _format_student(student: dict[str, object]) -> str:
 
 
 def _admin_ids() -> set[str]:
+    raw_ids = os.getenv("ADMIN_LINE_USER_IDS", "").strip()
+    if raw_ids.startswith("ADMIN_LINE_USER_IDS="):
+        raw_ids = raw_ids.partition("=")[2].strip()
+    raw_ids = raw_ids.strip("[]")
     return {
-        item.strip()
-        for item in os.getenv("ADMIN_LINE_USER_IDS", "").split(",")
-        if item.strip()
+        item.strip().strip("'\"")
+        for item in re.split(r"[,;\s]+", raw_ids)
+        if item.strip().strip("'\"")
     }
 
 
@@ -293,7 +298,8 @@ def handle_command(
     command_text = normalized_text.removeprefix(".").removeprefix("/")
     command_word, separator, raw_args = command_text.partition(" ")
     command_name = command_word.lower()
-    is_admin = bool(user_id and user_id in _admin_ids())
+    admins = _admin_ids()
+    is_admin = bool(user_id and user_id in admins)
     try:
         if command_name == "ticket" and not is_admin:
             tokens = [command_name, raw_args.strip()] if separator and raw_args.strip() else [command_name]
@@ -317,7 +323,24 @@ def handle_command(
     )
     if command in ADMIN_COMMANDS or (is_admin and admin_ticket_action):
         if not is_admin:
+            print(
+                "ADMIN AUTH DENIED:",
+                f"command={command}",
+                f"sender_id_present={bool(user_id)}",
+                "sender_matches_admin_id=False",
+                f"configured_admin_count={len(admins)}",
+            )
+            if not admins:
+                return (
+                    "Admin access is not configured in this running bot. "
+                    "Check ADMIN_LINE_USER_IDS in Railway and redeploy."
+                )
             return "This command is available to administrators only."
+        print(
+            "ADMIN AUTHORIZED:",
+            f"command={command}",
+            "sender_matches_admin_id=True",
+        )
         try:
             return _run_admin_command(tokens, user_id)
         except (RuntimeError, ValueError) as error:

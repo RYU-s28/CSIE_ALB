@@ -283,7 +283,7 @@ def handle_message(event):
             if classification.status != "unknown" and matched_by_line_user_id
             else "Pending",
             record.message,
-        ], table_range=ATTENDANCE_TABLE_RANGE, value_input_option="RAW")
+        ], value_input_option="RAW")
 
         reply_to_line(
             event.reply_token,
@@ -297,10 +297,13 @@ def handle_message(event):
         print("MATCHED KEYWORD:", record.matched_keyword)
 
     except Exception as error:
+        import traceback
+
         print(
             "ATTENDANCE CLASSIFICATION ERROR:",
             repr(error),
         )
+        traceback.print_exc()
         reply_to_line(
             event.reply_token,
             "I couldn't save your attendance. Please try again or contact an administrator.",

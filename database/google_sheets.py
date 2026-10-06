@@ -258,6 +258,14 @@ def _student_identity(record: dict[str, object]) -> dict[str, object]:
     return student
 
 
+def _is_student_active(record: dict[str, object]) -> bool:
+    """Treat a missing Active column as active; honor it when present."""
+
+    if "active" not in record:
+        return True
+    return str(record.get("active", "")).strip().lower() in {"true", "1", "yes"}
+
+
 def find_student_by_line_user_id(line_user_id: str) -> dict[str, object] | None:
     """Find the roster row associated with a LINE user ID."""
 
@@ -269,8 +277,7 @@ def find_student_by_line_user_id(line_user_id: str) -> dict[str, object] | None:
     for record in students:
         if (
             str(record.get("line_user_id", "")).strip() == str(line_user_id).strip()
-            and str(record.get("active", "")).strip().lower()
-            in {"true", "1", "yes"}
+            and _is_student_active(record)
         ):
             result = _student_identity(record)
             result.update(identity)
@@ -287,8 +294,7 @@ def find_students_by_display_name(
     return [
         _student_identity(record)
         for record in find_display_name_matches(students, display_name)
-        if str(record.get("active", "")).strip().lower()
-        in {"true", "1", "yes"}
+        if _is_student_active(record)
     ]
 
 

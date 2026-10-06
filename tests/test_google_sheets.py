@@ -128,6 +128,51 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
         self.assertEqual(raised.exception.existing_user_id, "U111")
         self.assertEqual(raised.exception.incoming_user_id, "U222")
 
+    def test_display_name_matches_without_an_active_column(self) -> None:
+        import database.google_sheets as google_sheets
+
+        records = [
+            {
+                "student_id": "S06516",
+                "chinese_name": "杜樂珮",
+                "full_name": "Romel R. Duran Jr.",
+                "display_name": "杜樂珮RYU",
+                "line_user_id": "",
+                "_row_number": 29,
+                "_line_user_id_column": 5,
+            }
+        ]
+        with mock.patch.object(
+            google_sheets,
+            "_read_students_records",
+            return_value=records,
+        ):
+            matches = google_sheets.find_students_by_display_name("杜樂珮RYU")
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["student_id"], "S06516")
+        self.assertEqual(matches[0]["_line_user_id_column"], 5)
+
+    def test_explicitly_inactive_student_does_not_match(self) -> None:
+        import database.google_sheets as google_sheets
+
+        records = [
+            {
+                "student_id": "S06516",
+                "full_name": "Romel R. Duran Jr.",
+                "display_name": "杜樂珮RYU",
+                "active": "FALSE",
+            }
+        ]
+        with mock.patch.object(
+            google_sheets,
+            "_read_students_records",
+            return_value=records,
+        ):
+            matches = google_sheets.find_students_by_display_name("杜樂珮RYU")
+
+        self.assertEqual(matches, [])
+
 
 if __name__ == "__main__":
     unittest.main()

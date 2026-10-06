@@ -120,22 +120,91 @@ def ensure_sheet_state():
     return spreadsheet
 
 
+def _normalize_header_name(value: str) -> str:
+    """Normalize a sheet header for lookup and comparison."""
+
+    return "".join(ch.lower() if ch.isalnum() else "_" for ch in str(value).strip()).strip("_")
+
+
+def _read_sheet_records(
+    sheet,
+    *,
+    required_headers: tuple[str, ...],
+) -> list[dict[str, object]]:
+    """Read a sheet while tolerating blank or duplicate header cells."""
+
+    if sheet is None:
+        return []
+
+    rows = sheet.get_all_values()
+    if not rows:
+        return []
+
+    header_row_idx = None
+    header_row = None
+    for idx, row in enumerate(rows):
+        if not any(str(cell).strip() for cell in row):
+            continue
+
+        normalized = [_normalize_header_name(cell) for cell in row]
+        matches = sum(1 for name in normalized if name in required_headers)
+        if matches > 0:
+            header_row_idx = idx
+            header_row = row
+            break
+
+    if header_row_idx is None or header_row is None:
+        return []
+
+    header_positions: list[tuple[int, str]] = []
+    for i, cell in enumerate(header_row):
+        name = _normalize_header_name(cell)
+        if not name:
+            continue
+        if name not in {existing_name for _, existing_name in header_positions}:
+            header_positions.append((i, name))
+
+    records: list[dict[str, object]] = []
+    for row in rows[header_row_idx + 1:]:
+        if not any(str(cell).strip() for cell in row):
+            continue
+
+        record: dict[str, object] = {}
+        for col_idx, header_name in header_positions:
+            if col_idx >= len(row):
+                continue
+            record[header_name] = str(row[col_idx]).strip()
+
+        if record:
+            records.append(record)
+
+    return records
+
+
+def _read_students_records() -> list[dict[str, object]]:
+    """Read the Students sheet robustly when the header row contains blanks."""
+
+    if ensure_sheet_state() is None or students_sheet is None:
+        return []
+
+    return _read_sheet_records(
+        students_sheet,
+        required_headers=("student_id", "name", "line_user_id", "active"),
+    )
+
+
 def find_student_by_line_user_id(line_user_id: str) -> dict[str, str] | None:
     """Find the roster row associated with a LINE user ID."""
 
-    if ensure_sheet_state() is None or students_sheet is None:
-        return None
-
-    return find_student(students_sheet.get_all_records(), line_user_id)
+    students = _read_students_records()
+    return find_student(students, line_user_id)
 
 
 def find_student_by_display_name(display_name: str) -> dict[str, str] | None:
     """Find one active roster entry by exact LINE display name."""
 
-    if ensure_sheet_state() is None or students_sheet is None:
-        return None
-
-    return find_student_name(students_sheet.get_all_records(), display_name)
+    students = _read_students_records()
+    return find_student_name(students, display_name)
 
 
 def ensure_attendance_sheet():

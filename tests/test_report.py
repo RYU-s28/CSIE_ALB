@@ -37,21 +37,19 @@ class AttendanceReportTests(unittest.TestCase):
 
         self.assertEqual(
             report,
-            "「2026/10/06」（禮拜二）\n\n"
-            "應到人數：41\n"
-            "實到人數：39\n\n"
-            "回菲律賓：1人\n"
-            "@華凌智\n\n"
-            "事假：1人\n"
-            "@言伊曼\n\n"
-            "遲到：1人\n"
-            "@倪瑪芮 HEART",
+            "Attendance Report — 2026-10-06\n\n"
+            "回菲律賓\n"
+            "• 華凌智\n\n"
+            "事假\n"
+            "• 言伊曼\n\n"
+            "遲到\n"
+            "• 倪瑪芮 HEART",
         )
         self.assertNotIn("病假", report)
         self.assertNotIn("經痛", report)
         self.assertNotIn("待確認", report)
 
-    def test_report_counts_only_leave_statuses_as_absent(self) -> None:
+    def test_report_omits_students_with_no_exception_status(self) -> None:
         report = build_report(
             report_date=date(2026, 10, 6),
             total_students=2,
@@ -64,8 +62,8 @@ class AttendanceReportTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("實到人數：2", report)
-        self.assertIn("待確認：1人", report)
+        self.assertNotIn("出席", report)
+        self.assertIn("待確認\n• 1", report)
 
 
 if __name__ == "__main__":

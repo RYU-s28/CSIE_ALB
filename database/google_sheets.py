@@ -2,6 +2,10 @@
 
 import json
 import os
+import re
+from datetime import date, datetime
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import gspread
 from dotenv import load_dotenv
@@ -32,11 +36,36 @@ ATTENDANCE_HEADERS = [
     "raw_message",
 ]
 LOGS_HEADERS = ["Work ID", "Name", "Date", "Type", "Status", "Raw Message"]
+AUDIT_HEADERS = [
+    "Action ID",
+    "Timestamp",
+    "Actor LINE User ID",
+    "Action",
+    "Student ID",
+    "Date",
+    "Old Status",
+    "New Status",
+    "Details",
+    "Undone",
+]
+TICKET_HEADERS = [
+    "Ticket ID",
+    "Created At",
+    "Student ID",
+    "LINE User ID",
+    "Message",
+    "Status",
+    "Handled By",
+    "Closed At",
+    "Admin Note",
+]
 
 spreadsheet = None
 students_sheet = None
 attendance_sheet = None
 logs_sheet = None
+audit_sheet = None
+tickets_sheet = None
 
 
 class LineRegistrationConflictError(Exception):
@@ -320,10 +349,10 @@ def get_report_students() -> tuple[dict[str, StudentDisplay], int]:
         if not student_id:
             continue
         display_name = str(
-            record.get("display_name")
+            record.get("chinese_name")
             or record.get("full_name")
+            or record.get("display_name")
             or record.get("name")
-            or record.get("chinese_name")
             or student_id
         ).strip()
         students[student_id] = StudentDisplay(
@@ -366,6 +395,405 @@ def ensure_attendance_sheet():
 
     ensure_sheet_state()
     return attendance_sheet
+
+
+def _ensure_named_sheet(name: str, headers: list[str]):
+    if ensure_sheet_state() is None:
+        return None
+    try:
+        sheet = spreadsheet.worksheet(name)
+    except WorksheetNotFound:
+        sheet = spreadsheet.add_worksheet(title=name, rows=1000, cols=len(headers))
+    if not any(str(value).strip() for value in sheet.row_values(1)):
+        sheet.append_row(headers, value_input_option="RAW")
+    return sheet
+
+
+def _attendance_header_layout():
+    sheet = ensure_attendance_sheet()
+    if sheet is None:
+        raise RuntimeError("Attendance worksheet is unavailable.")
+    match = re.match(r"([A-Z]+)(\d+)", ATTENDANCE_TABLE_RANGE)
+    if not match:
+        raise ValueError(f"Invalid attendance header range: {ATTENDANCE_TABLE_RANGE}")
+    start_column = 0
+    for character in match.group(1):
+        start_column = start_column * 26 + ord(character) - ord("A") + 1
+    start_column -= 1
+    header_row = int(match.group(2))
+    rows = sheet.get_all_values()
+    headers = rows[header_row - 1][start_column:]
+    normalized = [_normalize_header_name(cell) for cell in headers]
+    aliases = {
+        "work_id": "student_id",
+        "student_id": "student_id",
+        "name": "name",
+        "date": "date",
+        "type": "type",
+        "status": "status",
+        "raw_message": "raw_message",
+        "rawmessage": "raw_message",
+    }
+    columns = {
+        aliases.get(header, header): start_column + offset + 1
+        for offset, header in enumerate(normalized)
+        if aliases.get(header, header)
+    }
+    required = {"student_id", "name", "date", "type", "status"}
+    if not required.issubset(columns):
+        raise ValueError(f"Attendance headers are missing columns: {required - columns.keys()}")
+    return sheet, rows, header_row, columns
+
+
+def get_attendance_rows(target_date: date | None = None) -> list[dict[str, str]]:
+    """Read attendance entries, optionally filtered to one date."""
+
+    _, rows, header_row, columns = _attendance_header_layout()
+    records = []
+    for row_number, row in enumerate(rows[header_row:], start=header_row + 1):
+        record = {
+            key: str(row[column - 1]).strip()
+            for key, column in columns.items()
+            if column - 1 < len(row)
+        }
+        if not record.get("student_id") or not record.get("date"):
+            continue
+        try:
+            record["date"] = date.fromisoformat(record["date"][:10]).isoformat()
+        except ValueError:
+            continue
+        if target_date is not None and record["date"] != target_date.isoformat():
+            continue
+        record["_row_number"] = str(row_number)
+        records.append(record)
+    return records
+
+
+def get_attendance_record(student_id: str, target_date: date) -> dict[str, str] | None:
+    matches = [
+        row for row in get_attendance_rows(target_date)
+        if row.get("student_id") == student_id
+    ]
+    return matches[-1] if matches else None
+
+
+def _append_audit(
+    actor_line_user_id: str,
+    action: str,
+    student_id: str,
+    target_date: date,
+    old_status: str,
+    new_status: str,
+    details: str = "",
+) -> str:
+    sheet = _ensure_named_sheet("Audit Log", AUDIT_HEADERS)
+    if sheet is None:
+        raise RuntimeError("Audit Log worksheet is unavailable.")
+    action_id = uuid4().hex[:8].upper()
+    sheet.append_row(
+        [
+            action_id,
+            datetime.now(ZoneInfo("Asia/Taipei")).isoformat(),
+            actor_line_user_id,
+            action,
+            student_id,
+            target_date.isoformat(),
+            old_status,
+            new_status,
+            details,
+            "FALSE",
+        ],
+        value_input_option="RAW",
+    )
+    return action_id
+
+
+def _mark_audit_action(action_id: str, action: str, details: str = "") -> None:
+    sheet = _ensure_named_sheet("Audit Log", AUDIT_HEADERS)
+    if sheet is None:
+        raise RuntimeError("Audit Log worksheet is unavailable.")
+    for row_number, row in enumerate(sheet.get_all_values()[1:], start=2):
+        if row and row[0] == action_id:
+            sheet.update_cell(row_number, 4, action)
+            if details:
+                sheet.update_cell(row_number, 9, details)
+            return
+    raise RuntimeError(f"Audit action {action_id} could not be found.")
+
+
+def upsert_attendance_record(
+    student_id: str,
+    student_name: str,
+    target_date: date,
+    status: str,
+    actor_line_user_id: str,
+    *,
+    raw_message: str = "Admin update",
+    audit_details: str = "",
+) -> dict[str, str]:
+    """Create or replace one student/date record and audit the change."""
+
+    sheet, _, _, columns = _attendance_header_layout()
+    previous = get_attendance_record(student_id, target_date)
+    old_status = previous.get("type", "") if previous else ""
+    row = [
+        student_id,
+        student_name,
+        target_date.isoformat(),
+        status,
+        "Confirmed",
+        raw_message,
+    ]
+    action = "UPDATE" if previous else "INSERT"
+    action_id = _append_audit(
+        actor_line_user_id,
+        action,
+        student_id,
+        target_date,
+        old_status,
+        status,
+        audit_details,
+    )
+    try:
+        if previous:
+            row_number = int(previous["_row_number"])
+            first_column = min(columns.values())
+            last_column = max(columns.values())
+            values = row[:last_column - first_column + 1]
+            sheet.update(
+                range_name=f"{_column_letter(first_column)}{row_number}:{_column_letter(last_column)}{row_number}",
+                values=[values],
+                value_input_option="RAW",
+            )
+        else:
+            sheet.append_row(
+                row,
+                value_input_option="RAW",
+                table_range=ATTENDANCE_TABLE_RANGE,
+            )
+    except Exception:
+        _mark_audit_action(action_id, "FAILED", "Attendance write failed.")
+        raise
+    return {"action": action, "old_status": old_status, "action_id": action_id}
+
+
+def _column_letter(column: int) -> str:
+    letters = ""
+    while column:
+        column, remainder = divmod(column - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return letters
+
+
+def delete_attendance_record(
+    student_id: str,
+    target_date: date,
+    actor_line_user_id: str,
+    *,
+    leave_only: bool = False,
+) -> dict[str, str] | None:
+    """Remove one entry and preserve its prior value in the audit sheet."""
+
+    previous = get_attendance_record(student_id, target_date)
+    if previous is None:
+        return None
+    if leave_only and previous.get("type") not in {"病假", "事假", "經痛", "回菲律賓"}:
+        return None
+    sheet, _, _, _ = _attendance_header_layout()
+    row_number = int(previous["_row_number"])
+    old_status = previous.get("type", "")
+    old_values = dict(previous)
+    action_id = _append_audit(
+        actor_line_user_id,
+        "DELETE",
+        student_id,
+        target_date,
+        old_status,
+        "",
+        json.dumps(old_values, ensure_ascii=False),
+    )
+    try:
+        sheet.delete_rows(row_number)
+    except Exception:
+        _mark_audit_action(action_id, "FAILED", "Attendance delete failed.")
+        raise
+    return {"old_status": old_status, "action_id": action_id}
+
+
+def undo_last_attendance_action(actor_line_user_id: str) -> dict[str, str] | None:
+    """Undo the actor's most recent un-undone attendance mutation."""
+
+    sheet = _ensure_named_sheet("Audit Log", AUDIT_HEADERS)
+    if sheet is None:
+        raise RuntimeError("Audit Log worksheet is unavailable.")
+    rows = sheet.get_all_values()
+    if len(rows) < 2:
+        return None
+    headers = {_normalize_header_name(value): index for index, value in enumerate(rows[0])}
+    selected: list[tuple[int, list[str]]] = []
+    for row_number in range(len(rows), 1, -1):
+        row = rows[row_number - 1]
+        actor_col = headers.get("actor_line_user_id")
+        undone_col = headers.get("undone")
+        if actor_col is None or undone_col is None or len(row) <= max(actor_col, undone_col):
+            continue
+        if row[actor_col] != actor_line_user_id or row[undone_col].strip().lower() == "true":
+            continue
+        action_col = headers["action"]
+        if row[action_col] in {"UNDO", "FAILED"}:
+            continue
+        selected = [(row_number, row)]
+        details_col = headers.get("details")
+        selected_details = (
+            row[details_col]
+            if details_col is not None and details_col < len(row)
+            else ""
+        )
+        if selected_details.startswith("range:"):
+            selected = [
+                (candidate_number, candidate)
+                for candidate_number, candidate in enumerate(rows[1:], start=2)
+                if len(candidate) > max(actor_col, undone_col, action_col)
+                and candidate[actor_col] == actor_line_user_id
+                and candidate[undone_col].strip().lower() != "true"
+                and candidate[action_col] not in {"UNDO", "FAILED"}
+                and details_col is not None
+                and details_col < len(candidate)
+                and candidate[details_col] == selected_details
+            ]
+        break
+
+    if not selected:
+        return None
+
+    undone_records: list[dict[str, str]] = []
+    for row_number, row in sorted(selected, reverse=True):
+        student_col = headers["student_id"]
+        date_col = headers["date"]
+        old_col = headers["old_status"]
+        new_col = headers["new_status"]
+        target_date = date.fromisoformat(row[date_col])
+        student_id = row[student_col]
+        old_status = row[old_col]
+        new_status = row[new_col]
+        action = row[action_col]
+        if old_status:
+            student = find_student_by_id(student_id)
+            if student is None:
+                raise RuntimeError(f"Cannot undo: student {student_id} is not in Students.")
+            upsert_attendance_record(
+                student_id, student["name"], target_date, old_status,
+                actor_line_user_id, raw_message="Undo",
+            )
+        else:
+            delete_attendance_record(student_id, target_date, actor_line_user_id)
+        latest_audit = len(sheet.get_all_values())
+        if latest_audit > 1:
+            sheet.update_cell(latest_audit, action_col + 1, "UNDO")
+        sheet.update_cell(row_number, undone_col + 1, "TRUE")
+        undone_records.append(
+            {
+                "student_id": student_id,
+                "date": target_date.isoformat(),
+                "old_status": old_status,
+                "new_status": new_status,
+                "action": action,
+            }
+        )
+    return {"records": json.dumps(undone_records, ensure_ascii=False)}
+
+
+def _student_records() -> list[dict[str, object]]:
+    return _read_students_records()
+
+
+def find_student_by_id(identifier: str) -> dict[str, object] | None:
+    """Resolve an exact student ID or a unique exact roster name."""
+
+    normalized = identifier.strip().casefold()
+    matches = []
+    for record in _student_records():
+        candidates = {
+            str(record.get("student_id", "")).strip().casefold(),
+            str(record.get("full_name", "")).strip().casefold(),
+            str(record.get("chinese_name", "")).strip().casefold(),
+            str(record.get("display_name", "")).strip().casefold(),
+        }
+        if normalized in candidates and _is_student_active(record):
+            matches.append(_student_identity(record))
+    return matches[0] if len(matches) == 1 else None
+
+
+def find_student_by_line_id(line_user_id: str) -> dict[str, object] | None:
+    return find_student_by_line_user_id(line_user_id)
+
+
+def create_ticket(student_id: str, line_user_id: str, message: str) -> str:
+    sheet = _ensure_named_sheet("Tickets", TICKET_HEADERS)
+    if sheet is None:
+        raise RuntimeError("Tickets worksheet is unavailable.")
+    ticket_id = uuid4().hex[:4].upper()
+    sheet.append_row(
+        [
+            ticket_id,
+            datetime.now(ZoneInfo("Asia/Taipei")).isoformat(),
+            student_id,
+            line_user_id,
+            message,
+            "OPEN",
+            "",
+            "",
+            "",
+        ],
+        value_input_option="RAW",
+    )
+    return ticket_id
+
+
+def get_open_tickets() -> list[dict[str, str]]:
+    sheet = _ensure_named_sheet("Tickets", TICKET_HEADERS)
+    if sheet is None:
+        raise RuntimeError("Tickets worksheet is unavailable.")
+    rows = sheet.get_all_values()
+    return [
+        dict(zip(TICKET_HEADERS, row))
+        for row in rows[1:]
+        if len(row) >= len(TICKET_HEADERS) and row[5].upper() == "OPEN"
+    ]
+
+
+def get_ticket(ticket_id: str) -> dict[str, str] | None:
+    sheet = _ensure_named_sheet("Tickets", TICKET_HEADERS)
+    if sheet is None:
+        raise RuntimeError("Tickets worksheet is unavailable.")
+    rows = sheet.get_all_values()
+    for row in rows[1:]:
+        if row and row[0].casefold() == ticket_id.casefold():
+            padded = row + [""] * (len(TICKET_HEADERS) - len(row))
+            return dict(zip(TICKET_HEADERS, padded))
+    return None
+
+
+def update_ticket(ticket_id: str, actor_line_user_id: str, *, close: bool) -> bool:
+    sheet = _ensure_named_sheet("Tickets", TICKET_HEADERS)
+    if sheet is None:
+        raise RuntimeError("Tickets worksheet is unavailable.")
+    for row_number, row in enumerate(sheet.get_all_values()[1:], start=2):
+        if row and row[0].casefold() == ticket_id.casefold():
+            if close:
+                sheet.update(
+                    range_name=f"F{row_number}:H{row_number}",
+                    values=[["CLOSED", actor_line_user_id, datetime.now(ZoneInfo("Asia/Taipei")).isoformat()]],
+                    value_input_option="RAW",
+                )
+            else:
+                sheet.update(
+                    range_name=f"F{row_number}:H{row_number}",
+                    values=[["OPEN", "", ""]],
+                    value_input_option="RAW",
+                )
+            return True
+    return False
 
 
 def append_attendance_row(values: list[object]) -> bool:

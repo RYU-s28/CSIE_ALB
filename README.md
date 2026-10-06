@@ -29,3 +29,29 @@ processed immediately after successful registration.
 The attendance date parser recognizes today/tomorrow phrases and explicit dates
 such as `2026-10-07`. Leave categories are written with the configured Chinese
 labels, and recognized categories receive the `Confirmed` status.
+
+## LINE commands
+
+Set `ADMIN_LINE_USER_IDS` to a comma-separated list of administrator LINE
+Messaging API user IDs (the permanent `U...` IDs, not display names). Only those
+accounts can use administrative commands.
+Set `LINE_REPORT_GROUP_ID` to the LINE group ID where scheduled reports should
+be pushed. The app schedules a daily report at 7:00 Asia/Taipei on dates
+accepted by the work calendar; if no destination is configured, it logs that
+the report was skipped.
+
+Students can use `.hello`, `.statusme [date]`, `.clear [date]`, and
+`.ticket <message>`. A student can withdraw only their own leave dated today or
+later. Each withdrawal is recorded in the `Audit Log` worksheet.
+
+Administrators can use `.ping`, `.report [date]`, `.summary [date]`,
+`.status <student> [date]`, `.set <student> <status> [date]`,
+`.rm <student> [date]`,
+`.range <student> <status> <start-date> <end-date>`, `.undo`, `.tickets`,
+`.ticket show|close|reopen <ticket-id>`, and `.adminhelp`. Student IDs are
+preferred; a quoted exact name is accepted only when it identifies one active
+student. Dates accept `today`, `tomorrow`, or `YYYY-MM-DD`. Status aliases
+include `sick`, `personal`, `leave`, `late`, and `pending`; the sheet stores
+canonical Chinese labels. `.range` writes only dates selected by the current
+work calendar. Tickets are stored in a `Tickets` worksheet, and administrative
+attendance changes are recorded in `Audit Log` for `.undo`.

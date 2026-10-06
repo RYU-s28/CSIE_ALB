@@ -1,5 +1,7 @@
 import os
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from collections.abc import AsyncGenerator
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 
@@ -29,7 +31,6 @@ from database.google_sheets import (
     find_students_by_display_name,
     find_student_by_line_user_id,
     LineRegistrationConflictError,
-    get_report_students,
     register_line_user,
 )
 
@@ -54,7 +55,19 @@ if not CHANNEL_SECRET or not CHANNEL_ACCESS_TOKEN:
 # FastAPI + LINE setup
 # --------------------------------------------------
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    from scheduler.daily_report import scheduler, start_scheduler
+
+    start_scheduler()
+    try:
+        yield
+    finally:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+
+
+app = FastAPI(lifespan=lifespan)
 
 configuration = Configuration(
     access_token=CHANNEL_ACCESS_TOKEN
@@ -63,6 +76,7 @@ configuration = Configuration(
 handler = WebhookHandler(CHANNEL_SECRET)
 
 tracker = AttendanceTracker()
+
 
 # --------------------------------------------------
 # Health check
@@ -317,7 +331,7 @@ def handle_message(event):
     print("MESSAGE:", text)
 
     command_student_id = None
-    if user_id and normalize_command(text) == "statusme":
+    if user_id and normalize_command(text) in {"statusme", "clear", "ticket"}:
         try:
             student = find_student_by_line_user_id(user_id)
             if student:
@@ -325,22 +339,16 @@ def handle_message(event):
         except Exception as error:
             print("STUDENT LOOKUP ERROR:", repr(error))
 
-    report_students = None
-    expected_students = None
-    if normalize_command(text) in {"summary", "report"}:
-        try:
-            report_students, expected_students = get_report_students()
-        except Exception as error:
-            print("REPORT ROSTER LOOKUP ERROR:", repr(error))
-
-    command_response = handle_command(
-        text,
-        tracker,
-        user_id,
-        student_id=command_student_id,
-        report_students=report_students,
-        expected_students=expected_students,
-    )
+    try:
+        command_response = handle_command(
+            text,
+            tracker,
+            user_id,
+            student_id=command_student_id,
+        )
+    except Exception as error:
+        print("COMMAND PROCESSING ERROR:", repr(error))
+        command_response = "The command could not be completed. Please contact an administrator."
     if command_response is not None:
         reply_to_line(
             event.reply_token,

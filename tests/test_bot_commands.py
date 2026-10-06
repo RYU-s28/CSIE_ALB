@@ -1,93 +1,260 @@
+import os
 import unittest
+from datetime import date, timedelta
+from unittest import mock
 
 from attendance.attendance import AttendanceTracker
-from bot.commands import handle_command
+from bot import commands
+from bot.commands import handle_command, normalize_command
 
 
 class HandleCommandTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tracker = AttendanceTracker()
 
-    def test_general_commands_accept_optional_slash(self) -> None:
-        self.assertEqual(
-            handle_command("hello", self.tracker),
-            "Hello! I am your attendance bot.",
-        )
-        self.assertEqual(
-            handle_command(" /HELLO ", self.tracker),
-            "Hello! I am your attendance bot.",
-        )
-        self.assertEqual(
-            handle_command("help", self.tracker),
-            "Commands: absent, attendance, clear, hello, help, ping, report, status, statusme, summary",
-        )
-        self.assertEqual(
-            handle_command("/attendance", self.tracker),
-            "Attendance tracking is ready.",
-        )
+    def test_public_hello_lists_only_student_commands(self) -> None:
+        response = handle_command(".hello", self.tracker)
+        self.assertIn(".statusme [date]", response)
+        self.assertIn(".clear [date]", response)
+        self.assertIn(".ticket <message>", response)
+        self.assertNotIn(".report", response)
 
-    def test_ping_returns_pong(self) -> None:
-        expected = "Pong! Attendance bot is online ✅"
-        self.assertEqual(handle_command("/ping", self.tracker), expected)
-        self.assertEqual(handle_command("ping", self.tracker), expected)
+    def test_normalize_command_ignores_arguments_and_dot_prefix(self) -> None:
+        self.assertEqual(normalize_command(".statusme tomorrow"), "statusme")
+        self.assertEqual(normalize_command("/hello"), "hello")
 
-    def test_attendance_commands_are_handled(self) -> None:
-        commands = {
-            "statusme": "No attendance record found for you today.",
-            "summary": "應到人數：0",
-            "absent": "No absent students recorded today.",
-            "status": "No attendance records stored for today.",
-            "clear": "Today's attendance records cleared.",
-        }
-
-        for command, expected in commands.items():
-            with self.subTest(command=command):
-                self.assertIn(
-                    expected,
-                    handle_command(command, self.tracker, "student-1"),
-                )
-        self.assertTrue(
-            handle_command("report", self.tracker, "student-1")
+    def test_removed_public_commands_are_not_handled(self) -> None:
+        for text in (".help", ".absent", ".attendance"):
+            with self.subTest(text=text):
+                response = handle_command(text, self.tracker, "Ustudent")
+                self.assertIn("removed", response)
+        self.assertIn(
+            "administrators only",
+            handle_command(".ping", self.tracker, "Ustudent"),
         )
 
-    def test_summary_and_report_share_class_report_format(self) -> None:
-        self.tracker.add_from_message("S1", "病假")
-        roster_names = {}
+    def test_admin_commands_require_permanent_user_id_allowlist(self) -> None:
+        with mock.patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin,Uother"}):
+            self.assertEqual(
+                handle_command(".ping", self.tracker, "Uadmin"),
+                "Pong! Attendance bot is online.",
+            )
+            self.assertIn(
+                "administrators only",
+                handle_command(".ping", self.tracker, "Ustudent"),
+            )
 
-        summary = handle_command(
-            "/summary",
-            self.tracker,
-            report_students=roster_names,
-            expected_students=10,
-        )
-        report = handle_command(
-            "/report",
-            self.tracker,
-            report_students=roster_names,
-            expected_students=10,
-        )
+    def test_statusme_reads_student_record_by_id_and_date(self) -> None:
+        with mock.patch.object(
+            commands.google_sheets,
+            "get_attendance_record",
+            return_value={"type": "病假"},
+        ) as get_record:
+            response = handle_command(
+                ".statusme 2026-10-10",
+                self.tracker,
+                "U123",
+                student_id="S1",
+            )
 
-        self.assertIn("應到人數：10", summary)
-        self.assertIn("實到人數：9", summary)
-        self.assertIn("病假：1人", summary)
-        self.assertNotIn("回菲律賓", summary)
-        self.assertIn("病假：1人", report)
-        self.assertIn("應到人數：10", report)
+        self.assertEqual(response, "2026-10-10: 病假")
+        get_record.assert_called_once_with("S1", date(2026, 10, 10))
 
-    def test_unknown_text_is_not_a_command(self) -> None:
-        self.assertIsNone(handle_command("I am present", self.tracker))
-
-    def test_statusme_uses_roster_student_id(self) -> None:
-        self.tracker.add_from_message("24113328", "病假")
-
-        response = handle_command(
-            "statusme",
-            self.tracker,
+    def test_student_clear_withdraws_only_own_future_leave(self) -> None:
+        with (
+            mock.patch.object(commands, "_today", return_value=date(2026, 10, 6)),
+            mock.patch.object(
+                commands.google_sheets,
+                "delete_attendance_record",
+                return_value={"old_status": "病假", "action_id": "ABCD"},
+            ) as delete_record,
+        ):
+            response = handle_command(
+                ".clear tomorrow",
+                self.tracker,
+                "U123",
+                student_id="S1",
+            )
+        self.assertIn("2026-10-07", response)
+        delete_record.assert_called_once_with(
+            "S1",
+            date(2026, 10, 7),
             "U123",
-            student_id="24113328",
+            leave_only=True,
         )
 
-        self.assertIn("sick_leave", response)
+    def test_student_clear_does_not_allow_past_dates(self) -> None:
+        with mock.patch.object(commands, "_today", return_value=date(2026, 10, 6)):
+            response = handle_command(
+                ".clear 2026-10-05",
+                self.tracker,
+                "U123",
+                student_id="S1",
+            )
+        self.assertIn("only withdraw today's or a future", response)
+
+    def test_set_upserts_using_student_id_status_alias_and_date(self) -> None:
+        student = {"student_id": "S1", "name": "杜榮瑪"}
+        with (
+            mock.patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin"}),
+            mock.patch.object(
+                commands.google_sheets,
+                "find_student_by_id",
+                return_value=student,
+            ),
+            mock.patch.object(
+                commands.google_sheets,
+                "upsert_attendance_record",
+                return_value={"old_status": "病假", "action_id": "A1"},
+            ) as upsert,
+            mock.patch.object(commands, "_today", return_value=date(2026, 10, 6)),
+        ):
+            response = handle_command(
+                '.set S1 personal 2026-10-10',
+                self.tracker,
+                "Uadmin",
+            )
+        self.assertIn("病假 → 事假", response)
+        upsert.assert_called_once_with(
+            "S1", "杜榮瑪", date(2026, 10, 10), "事假", "Uadmin",
+        )
+
+    def test_quoted_student_name_and_ambiguous_name_safe_error(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin"}),
+            mock.patch.object(
+                commands.google_sheets,
+                "find_student_by_id",
+                return_value=None,
+            ) as find_student,
+        ):
+            response = handle_command(
+                '.set "杜 榮瑪" sick',
+                self.tracker,
+                "Uadmin",
+            )
+        self.assertIn("ambiguous", response)
+        find_student.assert_called_once_with("杜 榮瑪")
+
+    def test_range_applies_only_work_calendar_dates(self) -> None:
+        student = {"student_id": "S1", "name": "杜榮瑪"}
+        with (
+            mock.patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin"}),
+            mock.patch.object(
+                commands.google_sheets,
+                "find_student_by_id",
+                return_value=student,
+            ),
+            mock.patch.object(
+                commands.google_sheets,
+                "upsert_attendance_record",
+            ) as upsert,
+            mock.patch.object(
+                commands,
+                "is_workday",
+                side_effect=lambda day: day.weekday() in {2, 3, 4, 5, 6},
+            ),
+        ):
+            response = handle_command(
+                ".range S1 sick 2026-10-06 2026-10-11",
+                self.tracker,
+                "Uadmin",
+            )
+
+        self.assertIn("Workdays affected: 5", response)
+        self.assertEqual(upsert.call_count, 5)
+        audit_groups = {
+            call.kwargs["audit_details"]
+            for call in upsert.call_args_list
+        }
+        self.assertEqual(len(audit_groups), 1)
+        self.assertTrue(next(iter(audit_groups)).startswith("range:"))
+
+    def test_admin_undo_formats_all_restored_range_dates(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin"}),
+            mock.patch.object(
+                commands.google_sheets,
+                "undo_last_attendance_action",
+                return_value={
+                    "records": (
+                        '[{"student_id":"S1","date":"2026-10-10",'
+                        '"new_status":"病假","old_status":""}]'
+                    )
+                },
+            ) as undo,
+        ):
+            response = handle_command(".undo", self.tracker, "Uadmin")
+
+        self.assertIn("S1 / 2026-10-10", response)
+        self.assertIn("病假 → no record", response)
+        undo.assert_called_once_with("Uadmin")
+
+    def test_admin_summary_and_report_date_dispatch(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin"}),
+            mock.patch.object(
+                commands,
+                "_report_data",
+                return_value="formatted report",
+            ) as report_data,
+        ):
+            self.assertEqual(
+                handle_command(".summary tomorrow", self.tracker, "Uadmin"),
+                "formatted report",
+            )
+            report_data.assert_called_once_with(
+                commands._today() + timedelta(days=1),
+                summary=True,
+            )
+
+    def test_summary_is_compact_and_counts_unique_sheet_attendance(self) -> None:
+        with (
+            mock.patch.object(
+                commands.google_sheets,
+                "get_report_students",
+                return_value=({}, 12),
+            ),
+            mock.patch.object(
+                commands.google_sheets,
+                "get_attendance_rows",
+                return_value=[
+                    {"student_id": "S1", "type": "病假"},
+                    {"student_id": "S1", "type": "事假"},
+                    {"student_id": "S2", "type": "遲到"},
+                ],
+            ),
+        ):
+            summary = commands._report_data(date(2026, 10, 10), summary=True)
+
+        self.assertEqual(
+            summary,
+            "2026-10-10\n\n事假: 1\n遲到: 1\n\nTotal exceptions: 2",
+        )
+
+    def test_student_ticket_creates_a_sheet_ticket(self) -> None:
+        with (
+            mock.patch.object(
+                commands.google_sheets,
+                "create_ticket",
+                return_value="A014",
+            ) as create_ticket,
+            mock.patch.object(
+                commands.google_sheets,
+                "find_student_by_id",
+                return_value={"student_id": "S1", "name": "杜榮瑪"},
+            ),
+        ):
+            response = handle_command(
+                ".ticket I'm requesting a leave change.",
+                self.tracker,
+                "U123",
+                student_id="S1",
+            )
+        self.assertIn("Ticket #A014", response)
+        create_ticket.assert_called_once_with(
+            "S1", "U123", "I'm requesting a leave change.",
+        )
 
 
 if __name__ == "__main__":

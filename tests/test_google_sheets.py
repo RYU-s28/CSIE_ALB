@@ -1,6 +1,7 @@
 import importlib
 import os
 import unittest
+from datetime import date
 from unittest import mock
 
 
@@ -229,11 +230,13 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
         records = [
             {
                 "student_id": "S1",
-                "display_name": "華凌智",
+                "chinese_name": "華凌智",
+                "display_name": "Roster nick",
                 "full_name": "Student One",
             },
             {
                 "student_id": "S2",
+                "chinese_name": "倪瑪芮 HEART",
                 "display_name": "倪瑪芮 HEART",
                 "full_name": "Student Two",
                 "active": "TRUE",
@@ -255,6 +258,121 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
         self.assertEqual(students["S1"].display_name, "華凌智")
         self.assertEqual(students["S2"].display_name, "倪瑪芮 HEART")
         self.assertNotIn("S3", students)
+
+    def test_attendance_upsert_updates_one_student_date_row(self) -> None:
+        import database.google_sheets as google_sheets
+
+        class SheetStub:
+            def __init__(self) -> None:
+                self.values = [
+                    ["Work ID", "Name", "Date", "Type", "Status", "Raw Message"],
+                    ["S1", "Student One", "2026-10-10", "病假", "Confirmed", "old"],
+                ]
+                self.updated = None
+
+            def get_all_values(self):
+                return self.values
+
+            def update(self, *, range_name, values, value_input_option):
+                self.updated = (range_name, values, value_input_option)
+
+        sheet = SheetStub()
+        with (
+            mock.patch.object(google_sheets, "ensure_attendance_sheet", return_value=sheet),
+            mock.patch.object(google_sheets, "ATTENDANCE_TABLE_RANGE", "A1:F1"),
+            mock.patch.object(google_sheets, "_append_audit", return_value="ACT1"),
+        ):
+            result = google_sheets.upsert_attendance_record(
+                "S1",
+                "Student One",
+                date(2026, 10, 10),
+                "事假",
+                "Uadmin",
+            )
+
+        self.assertEqual(result["action"], "UPDATE")
+        self.assertEqual(result["old_status"], "病假")
+        self.assertEqual(sheet.updated[0], "A2:F2")
+        self.assertEqual(sheet.updated[1][0][3], "事假")
+
+    def test_student_leave_removal_is_restricted_to_leave_rows(self) -> None:
+        import database.google_sheets as google_sheets
+
+        class SheetStub:
+            def get_all_values(self):
+                return [
+                    ["Work ID", "Name", "Date", "Type", "Status", "Raw Message"],
+                    ["S1", "Student One", "2026-10-10", "遲到", "Confirmed", ""],
+                ]
+
+        with (
+            mock.patch.object(google_sheets, "ensure_attendance_sheet", return_value=SheetStub()),
+            mock.patch.object(google_sheets, "ATTENDANCE_TABLE_RANGE", "A1:F1"),
+        ):
+            result = google_sheets.delete_attendance_record(
+                "S1",
+                date(2026, 10, 10),
+                "Ustudent",
+                leave_only=True,
+            )
+
+        self.assertIsNone(result)
+
+    def test_undo_reverts_every_change_in_a_range_batch(self) -> None:
+        import json
+        import database.google_sheets as google_sheets
+
+        class AuditSheetStub:
+            def __init__(self) -> None:
+                self.rows = [
+                    google_sheets.AUDIT_HEADERS,
+                    [
+                        "ACT1", "time", "Uadmin", "UPDATE", "S1",
+                        "2026-10-08", "事假", "病假", "range:BATCH1", "FALSE",
+                    ],
+                    [
+                        "ACT2", "time", "Uadmin", "UPDATE", "S1",
+                        "2026-10-09", "事假", "病假", "range:BATCH1", "FALSE",
+                    ],
+                ]
+
+            def get_all_values(self):
+                return self.rows
+
+            def update_cell(self, row: int, column: int, value: str) -> None:
+                self.rows[row - 1][column - 1] = value
+
+        sheet = AuditSheetStub()
+
+        def record_undo(*args, **kwargs):
+            sheet.rows.append(
+                [
+                    "UNDO1", "time", "Uadmin", "INSERT", args[0],
+                    args[2].isoformat(), "", args[3], "Undo", "FALSE",
+                ]
+            )
+
+        with (
+            mock.patch.object(google_sheets, "_ensure_named_sheet", return_value=sheet),
+            mock.patch.object(
+                google_sheets,
+                "find_student_by_id",
+                return_value={"student_id": "S1", "name": "Student One"},
+            ),
+            mock.patch.object(
+                google_sheets,
+                "upsert_attendance_record",
+                side_effect=record_undo,
+            ) as upsert,
+        ):
+            result = google_sheets.undo_last_attendance_action("Uadmin")
+
+        self.assertEqual(len(json.loads(result["records"])), 2)
+        self.assertEqual(upsert.call_count, 2)
+        self.assertEqual(sheet.rows[1][9], "TRUE")
+        self.assertEqual(sheet.rows[2][9], "TRUE")
+        self.assertEqual(sheet.rows[3][3], "UNDO")
+        self.assertEqual(sheet.rows[4][3], "UNDO")
 
 
 if __name__ == "__main__":

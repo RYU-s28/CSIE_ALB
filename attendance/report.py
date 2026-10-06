@@ -17,14 +17,6 @@ STATUS_LABELS = {
     "unknown": "待確認",
 }
 
-ABSENT_STATUSES = {
-    "personal_leave",
-    "sick_leave",
-    "menstrual_leave",
-    "abroad",
-}
-
-
 @dataclass(slots=True)
 class StudentDisplay:
     """Display information used when formatting a LINE report."""
@@ -48,30 +40,14 @@ def build_report(
 ) -> str:
     """Build a text attendance report similar to the class LINE format."""
 
+    del total_students, expected_students
     students = students or {}
     grouped: dict[str, list[AttendanceRecord]] = {}
 
     for record in records:
         grouped.setdefault(record.status, []).append(record)
 
-    absent_ids = {
-        record.student_id
-        for record in records
-        if record.status in ABSENT_STATUSES
-    }
-
-    expected = expected_students if expected_students is not None else total_students
-    present = max(expected - len(absent_ids), 0)
-
-    weekday = _weekday_zh(report_date)
-
-    lines = [
-        f"「{report_date:%Y/%m/%d}」（{weekday}）",
-        "",
-        f"應到人數：{expected}",
-        f"實到人數：{present}",
-        "",
-    ]
+    lines = [f"Attendance Report — {report_date.isoformat()}", ""]
 
     section_order = (
         "abroad",
@@ -88,29 +64,16 @@ def build_report(
             continue
 
         label = STATUS_LABELS[status]
-        lines.append(f"{label}：{len(status_records)}人")
+        lines.append(label)
 
         for record in sorted(status_records, key=lambda item: item.student_id):
             student = students.get(record.student_id)
 
             if student:
-                lines.append(f"@{student.line_label}")
+                lines.append(f"• {student.line_label}")
             else:
-                lines.append(f"@{record.student_id}")
+                lines.append(f"• {record.student_id}")
 
         lines.append("")
 
     return "\n".join(lines).strip()
-
-
-def _weekday_zh(value: date) -> str:
-    weekdays = (
-        "禮拜一",
-        "禮拜二",
-        "禮拜三",
-        "禮拜四",
-        "禮拜五",
-        "禮拜六",
-        "禮拜日",
-    )
-    return weekdays[value.weekday()]

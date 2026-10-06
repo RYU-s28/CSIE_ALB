@@ -20,6 +20,7 @@ from linebot.v3.webhooks import (
 from attendance.attendance import AttendanceTracker
 from datetime import date
 from attendance.report import build_report
+from bot.commands import get_command_response, normalize_command
 
 
 # --------------------------------------------------
@@ -141,18 +142,26 @@ def handle_message(event):
         None,
     )
 
-    normalized_text = text.strip().lower()
+    normalized_text = normalize_command(text)
 
     print("------------------------------")
     print("USER:", user_id)
     print("GROUP:", group_id)
     print("MESSAGE:", text)
 
+    command_response = get_command_response(text)
+    if command_response is not None:
+        reply_to_line(
+            event.reply_token,
+            command_response,
+        )
+        return
+
     # --------------------------------------------------
     # /ping
     # --------------------------------------------------
 
-    if normalized_text in {"ping", "/ping"}:
+    if normalized_text == "ping":
         reply_to_line(
             event.reply_token,
             "Pong! Attendance bot is online ✅"
@@ -164,7 +173,7 @@ def handle_message(event):
     # Show this user's current status
     # --------------------------------------------------
 
-    if normalized_text == "/statusme":
+    if normalized_text == "statusme":
         record = tracker.get_record(user_id)
 
         if not record:
@@ -192,7 +201,7 @@ def handle_message(event):
     # /summary
     # --------------------------------------------------
 
-    if normalized_text == "/summary":
+    if normalized_text == "summary":
         summary = tracker.get_summary()
 
         message = (
@@ -218,7 +227,7 @@ def handle_message(event):
     # Build the full attendance report text and send immediately
     # --------------------------------------------------
 
-    if normalized_text == "/report":
+    if normalized_text == "report":
         records = tracker.get_records_for_date()
 
         total_students = len({r.student_id for r in records})
@@ -240,7 +249,7 @@ def handle_message(event):
     # /absent
     # --------------------------------------------------
 
-    if normalized_text == "/absent":
+    if normalized_text == "absent":
         absent_statuses = {
             "sick_leave",
             "personal_leave",
@@ -282,7 +291,7 @@ def handle_message(event):
     # Show everything currently stored
     # --------------------------------------------------
 
-    if normalized_text == "/status":
+    if normalized_text == "status":
         records = tracker.get_records_for_date()
 
         if not records:
@@ -316,9 +325,7 @@ def handle_message(event):
     # Development only!
     # --------------------------------------------------
 
-    if normalized_text == "/clear":
-        from datetime import date
-
+    if normalized_text == "clear":
         tracker.clear_date(date.today())
 
         reply_to_line(

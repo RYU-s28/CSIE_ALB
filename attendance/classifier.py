@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,23 +77,58 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+MIN_ATTENDANCE_CONFIDENCE = 0.60
+
+LEAVE_INTENT_PATTERNS = (
+    r"\b(?:take|taking|request|requesting|apply for|applied for)\s+"
+    r"(?:a\s+)?(?:sick|personal|menstrual|medical)?\s*leave\b",
+    r"\b(?:will|going to)\s+(?:be\s+)?(?:taking|take|request|requesting)\s+"
+    r"(?:a\s+)?(?:sick|personal|menstrual|medical)?\s*leave\b",
+    r"\b(?:will not work|won't work|can't work|cannot work|unable to work)\b",
+    r"\b(?:will not be working|won't be working|can't come|cannot come|"
+    r"will not come|won't come|not coming)\b",
+    r"\b(?:take|taking|requesting)\s+(?:a\s+)?leave\b",
+    r"\b(?:i am|i'm|was|will be|arrived)\s+late\b",
+)
+CHINESE_LEAVE_INTENT_PHRASES = (
+    "請病假",
+    "请病假",
+    "請事假",
+    "请事假",
+    "請假",
+    "请假",
+    "休假",
+    "不上班",
+    "不來上班",
+    "不来上班",
+    "不會上班",
+    "不会上班",
+    "無法上班",
+    "无法上班",
+    "今天不來",
+    "今天不来",
+    "明天不來",
+    "明天不来",
+)
+NEGATED_LEAVE_PATTERNS = (
+    r"\b(?:not|don't|do not|doesn't|does not|won't|will not|never)\s+"
+    r"(?:be\s+)?(?:taking|take|requesting|request|need|apply for)\s+"
+    r"(?:a\s+)?(?:sick|personal|menstrual|medical)?\s*leave\b",
+    r"\bno\s+(?:sick|personal|menstrual|medical)?\s*leave\b",
+)
+
 
 def classify_status(message: str) -> ClassificationResult:
-    """Classify a student's LINE message using simple keyword rules.
-
-    This intentionally returns ``unknown`` when no clear rule matches.
-    More advanced date/context analysis can be layered on top later.
-    """
+    """Classify clear leave/attendance intent; ignore casual keyword mentions."""
 
     text = normalize_text(message)
 
     if not text:
-        return ClassificationResult(
-            status="unknown",
-            confidence=0.0,
-        )
+        return _unknown_result()
 
-    # Check the more specific leave categories before general ones.
+    if any(re.search(pattern, text) for pattern in NEGATED_LEAVE_PATTERNS):
+        return _unknown_result()
+
     priority = (
         "menstrual_leave",
         "sick_leave",
@@ -101,19 +137,63 @@ def classify_status(message: str) -> ClassificationResult:
         "late",
     )
 
+    matched_status = None
+    matched_keyword = None
     for status in priority:
         for keyword in KEYWORDS[status]:
             if normalize_text(keyword) in text:
-                return ClassificationResult(
-                    status=status,
-                    confidence=0.95,
-                    matched_keyword=keyword,
-                )
+                matched_status = status
+                matched_keyword = keyword
+                break
+        if matched_status is not None:
+            break
+
+    explicit_status_phrase = matched_keyword in {
+        "病假",
+        "事假",
+        "經痛",
+        "生理假",
+        "回國",
+        "回菲律賓",
+        "遲到",
+        "迟到",
+    }
+    has_leave_intent = (
+        any(re.search(pattern, text) for pattern in LEAVE_INTENT_PATTERNS)
+        or any(phrase in text for phrase in CHINESE_LEAVE_INTENT_PHRASES)
+        or explicit_status_phrase
+    )
+    checklist_score = 0.0
+    if has_leave_intent:
+        checklist_score += 0.65
+    if matched_keyword is not None:
+        checklist_score += 0.25
+    if explicit_status_phrase:
+        checklist_score = max(checklist_score, 0.70)
+    confidence = min(checklist_score, 0.95)
+    if confidence < MIN_ATTENDANCE_CONFIDENCE:
+        return _unknown_result()
+
+    if matched_status is None:
+        matched_status = "personal_leave"
+        matched_keyword = next(
+            (
+                phrase
+                for phrase in CHINESE_LEAVE_INTENT_PHRASES
+                if phrase in text
+            ),
+            "work absence",
+        )
 
     return ClassificationResult(
-        status="unknown",
-        confidence=0.0,
+        status=matched_status,
+        confidence=confidence,
+        matched_keyword=matched_keyword,
     )
+
+
+def _unknown_result() -> ClassificationResult:
+    return ClassificationResult(status="unknown", confidence=0.0)
 
 
 def normalize_text(text: str) -> str:

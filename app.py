@@ -20,7 +20,10 @@ from linebot.v3.webhooks import (
 )
 
 from attendance.attendance import AttendanceTracker
-from attendance.classifier import classify_status
+from attendance.classifier import (
+    MIN_ATTENDANCE_CONFIDENCE,
+    classify_status,
+)
 from attendance.leave_message import (
     LEAVE_TYPE_LABELS,
     parse_attendance_date,
@@ -356,6 +359,18 @@ def handle_message(event):
         )
         return
 
+    classification = classify_status(text)
+    if (
+        classification.status == "unknown"
+        or classification.confidence < MIN_ATTENDANCE_CONFIDENCE
+    ):
+        print(
+            "Non-attendance LINE message ignored:",
+            f"confidence={classification.confidence:.2f}",
+            f"matched_keyword={classification.matched_keyword}",
+        )
+        return
+
     # --------------------------------------------------
     # No user ID
     # --------------------------------------------------
@@ -424,7 +439,6 @@ def handle_message(event):
             return
 
         matched_by_line_user_id = True
-        classification = classify_status(text)
         attendance_date = parse_attendance_date(text)
         record = tracker.add_from_message(
             student_id=student_work_id,

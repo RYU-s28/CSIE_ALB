@@ -360,7 +360,7 @@ def handle_message(event):
         return
 
     try:
-        classification = classify_attendance_message(text)
+        analysis = classify_attendance_message(text)
     except Exception as error:
         import traceback
 
@@ -368,16 +368,25 @@ def handle_message(event):
         traceback.print_exc()
         reply_to_line(
             event.reply_token,
-            "I couldn't classify this attendance message. Please try again "
-            "or contact an administrator.",
+            "The attendance classifier is unavailable, so your message was "
+            "not saved. Please try again later or contact an administrator.",
         )
         return
 
-    if classification.status == "unrelated":
+    if analysis.intent == "IGNORE":
         print(
             "Non-attendance LINE message ignored:",
-            f"confidence={classification.confidence:.2f}",
-            f"matched_keyword={classification.matched_keyword}",
+            analysis.reasoning,
+        )
+        return
+
+    if analysis.intent == "REVIEW":
+        reply_to_line(
+            event.reply_token,
+            "I noticed you mentioned "
+            f"{analysis.category}, but it's unclear whether you're notifying "
+            "us of an absence. Are you requesting leave? Please send a clear "
+            "leave notice with the date.",
         )
         return
 
@@ -450,6 +459,7 @@ def handle_message(event):
 
         matched_by_line_user_id = True
         attendance_date = parse_attendance_date(text)
+        classification = analysis.to_classification_result()
         record = tracker.add_from_message(
             student_id=student_work_id,
             message=text,
@@ -484,7 +494,7 @@ def handle_message(event):
 
         print("CLASSIFICATION:", record.status)
         print("CONFIDENCE:", record.confidence)
-        print("MATCHED KEYWORD:", record.matched_keyword)
+        print("AI REASONING:", analysis.reasoning)
 
     except Exception as error:
         import traceback

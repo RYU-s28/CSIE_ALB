@@ -166,18 +166,14 @@ def _python_confidently_detects_leave_intent(
     message: str,
     result: ClassificationResult,
 ) -> bool:
-    """Trust Python's positive intent only for declarative, present/future text."""
+    """Return true only for an unambiguous first-person leave declaration."""
 
     if not result.attendance_intent:
         return False
     text = message.casefold().strip()
     if "?" in text or "？" in text:
         return False
-    if re.match(
-        r"^(who|what|when|where|why|how|is|are|do|does|did|can|could|"
-        r"would|will|should|have|has)\b",
-        text,
-    ):
+    if re.match(r"^(who|what|when|where|why|how|can you|could you|please)\b", text):
         return False
     if any(
         marker in text
@@ -194,10 +190,50 @@ def _python_confidently_detects_leave_intent(
             "if you",
             "如果",
             "假如",
+            "請問",
+            "请问",
+            "你",
+            "他",
+            "她",
+            "they ",
+            "he ",
+            "she ",
+            "your ",
+            "their ",
+            "policy",
+            "definition",
+            "meaning",
+            "discuss",
         )
     ):
         return False
-    return True
+    if re.search(
+        r"\b(?:i|i'm|i am|we|we're|we are)\b.{0,100}"
+        r"\b(?:can't|cannot|won't|will not|unable|not coming|"
+        r"taking leave|request(?:ing)? leave)\b",
+        text,
+    ):
+        return True
+    if re.search(
+        r"^我.{0,40}(?:不能|無法|无法|不會|不会|不去).{0,20}"
+        r"(?:上班|工作|出席|來|来)",
+        text,
+    ):
+        return True
+    if re.search(
+        r"^我.{0,30}(?:請|请|休).{0,8}"
+        r"(?:病假|事假|經痛|经痛|生理假|特休|假)",
+        text,
+    ):
+        return True
+    return bool(
+        re.match(
+            r"^(?:(?:today|tomorrow|明天|今天|後天|后天)\s*)?"
+            r"(?:病假|事假|經痛|经痛|生理假|特休|請假|请假|"
+            r"不上班|不來上班|不来上班|不能上班|無法上班|无法上班)$",
+            text,
+        )
+    )
 
 
 def _has_attendance_signal(message: str, result: ClassificationResult) -> bool:
@@ -231,6 +267,7 @@ def classify_attendance_message(message: str) -> AttendanceAnalysis:
     if (
         python_result.status != "unknown"
         and python_result.confidence >= MIN_ATTENDANCE_CONFIDENCE
+        and _python_confidently_detects_leave_intent(message, python_result)
     ):
         return _python_leave_analysis(python_result)
 
@@ -271,6 +308,18 @@ def classify_attendance_message(message: str) -> AttendanceAnalysis:
         )
     if intent_result.intent != "LEAVE":
         return intent_result
+
+    python_category = STATUS_TO_CATEGORY.get(python_result.status)
+    if (
+        python_category is not None
+        and python_result.confidence >= MIN_ATTENDANCE_CONFIDENCE
+    ):
+        return AttendanceAnalysis(
+            intent="LEAVE",
+            category=python_category,
+            reasoning=intent_result.reasoning,
+            classification_result=python_result,
+        )
 
     category_result = _parse_category_response(
         _generate_json(

@@ -61,6 +61,7 @@ class AiAttendanceClassifierTests(unittest.TestCase):
     def test_confident_python_leave_category_skips_gemini(self) -> None:
         messages = (
             ("明天病假", "sick_leave"),
+            ("我今天不能去上班，因為我不舒服", "sick_leave"),
             (
                 "I can't work tomorrow because im not feeling well",
                 "sick_leave",
@@ -75,6 +76,29 @@ class AiAttendanceClassifierTests(unittest.TestCase):
                     result.to_classification_result().status,
                     expected_status,
                 )
+
+    def test_chinese_leave_discussion_requires_ai_intent_confirmation(self) -> None:
+        analysis, _, client = call_classifier(
+            "請問你叫什麼名字，請假完成後再上傳截圖，謝謝",
+            '{"intent":"IGNORE","reasoning":"This is an instruction to someone else."}',
+        )
+
+        self.assertEqual(analysis.intent, "IGNORE")
+        client.interactions.create.assert_called_once()
+        request = client.interactions.create.call_args.kwargs
+        self.assertEqual(
+            request["response_format"]["schema"],
+            INTENT_RESPONSE_SCHEMA,
+        )
+
+    def test_category_keyword_in_question_does_not_skip_intent_ai(self) -> None:
+        analysis, _, client = call_classifier(
+            "你明天請病假嗎？",
+            '{"intent":"IGNORE","reasoning":"The sender asks another person."}',
+        )
+
+        self.assertEqual(analysis.intent, "IGNORE")
+        client.interactions.create.assert_called_once()
 
     def test_uncertain_intent_that_ai_ignores_uses_one_ai_call(self) -> None:
         analysis, _, client = call_classifier(

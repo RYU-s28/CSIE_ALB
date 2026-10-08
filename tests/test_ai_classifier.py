@@ -77,6 +77,69 @@ class AiAttendanceClassifierTests(unittest.TestCase):
                     expected_status,
                 )
 
+    def test_bus_notices_are_saved_as_attendance_without_gemini(self) -> None:
+        messages = (
+            "您好，不好意思，我今天沒辦法搭車回學校",
+            (
+                "I did not catch up the bus. I will be taking uber now to work. "
+                "Thank you for understanding."
+            ),
+            "I won't be taking the bus today because...",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    analysis = classify_attendance_message(message)
+                self.assertEqual(analysis.intent, "ATTENDANCE")
+                self.assertEqual(analysis.category, "不坐公交車")
+                self.assertEqual(
+                    analysis.to_classification_result().status,
+                    "no_bus",
+                )
+
+    def test_question_about_bus_notice_uses_intent_ai(self) -> None:
+        analysis, _, client = call_classifier(
+            "Are you not taking the bus today?",
+            '{"intent":"IGNORE","reasoning":"The sender asks another person."}',
+        )
+
+        self.assertEqual(analysis.intent, "IGNORE")
+        client.interactions.create.assert_called_once()
+        request = client.interactions.create.call_args.kwargs
+        self.assertEqual(
+            request["response_format"]["schema"],
+            INTENT_RESPONSE_SCHEMA,
+        )
+
+    def test_uncertain_bus_notice_uses_both_ai_stages(self) -> None:
+        analysis, _, client = call_classifier(
+            "The bus service is disrupted; I need another way to commute today.",
+            (
+                '{"intent":"ATTENDANCE",'
+                '"reasoning":"The sender is reporting a transport issue, not absence."}'
+            ),
+            (
+                '{"category":"不坐公交車",'
+                '"reasoning":"The sender reports a bus transportation issue."}'
+            ),
+        )
+
+        self.assertEqual(analysis.intent, "ATTENDANCE")
+        self.assertEqual(analysis.category, "不坐公交車")
+        self.assertEqual(analysis.to_classification_result().status, "no_bus")
+        self.assertEqual(client.interactions.create.call_count, 2)
+        intent_request, category_request = [
+            call.kwargs for call in client.interactions.create.call_args_list
+        ]
+        self.assertEqual(
+            intent_request["response_format"]["schema"],
+            INTENT_RESPONSE_SCHEMA,
+        )
+        self.assertEqual(
+            category_request["response_format"]["schema"],
+            CATEGORY_RESPONSE_SCHEMA,
+        )
+
     def test_chinese_leave_discussion_requires_ai_intent_confirmation(self) -> None:
         analysis, _, client = call_classifier(
             "請問你叫什麼名字，請假完成後再上傳截圖，謝謝",
@@ -177,6 +240,10 @@ class AiAttendanceClassifierTests(unittest.TestCase):
             (
                 "I won't work tomorrow for some reason",
                 ('{"category":"unknown","reasoning":"?"}',),
+            ),
+            (
+                "I won't work tomorrow because of the bus situation",
+                ('{"category":"不坐公交車","reasoning":"?"}',),
             ),
         )
         for message, responses in cases:

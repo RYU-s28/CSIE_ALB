@@ -13,15 +13,21 @@ class HandleCommandTests(unittest.TestCase):
         self.tracker = AttendanceTracker()
 
     def test_public_hello_lists_only_student_commands(self) -> None:
-        response = handle_command(".hello", self.tracker)
-        self.assertIn(".statusme [date]", response)
-        self.assertIn(".clear [date]", response)
-        self.assertIn(".ticket <message>", response)
-        self.assertNotIn(".report", response)
+        response = handle_command("/hello", self.tracker)
+        self.assertIn("/statusme [date]", response)
+        self.assertIn("/clear [date]", response)
+        self.assertIn("/ticket <message>", response)
+        self.assertNotIn("/report", response)
 
-    def test_normalize_command_ignores_arguments_and_dot_prefix(self) -> None:
-        self.assertEqual(normalize_command(".statusme tomorrow"), "statusme")
+    def test_normalize_command_requires_slash_and_ignores_arguments(self) -> None:
+        self.assertEqual(normalize_command("/statusme tomorrow"), "statusme")
         self.assertEqual(normalize_command("/hello"), "hello")
+        self.assertEqual(normalize_command(".statusme tomorrow"), "")
+
+    def test_dot_prefixed_text_is_not_handled_as_a_command(self) -> None:
+        for text in (".hello", ".statusme", ".ping", ".help"):
+            with self.subTest(text=text):
+                self.assertIsNone(handle_command(text, self.tracker, "Uadmin"))
 
     def test_ordinary_messages_with_apostrophes_are_not_parsed_as_commands(self) -> None:
         for text in (
@@ -33,24 +39,24 @@ class HandleCommandTests(unittest.TestCase):
                 self.assertIsNone(handle_command(text, self.tracker, "Ustudent"))
 
     def test_removed_public_commands_are_not_handled(self) -> None:
-        for text in (".help", ".absent", ".attendance"):
+        for text in ("/help", "/absent", "/attendance"):
             with self.subTest(text=text):
                 response = handle_command(text, self.tracker, "Ustudent")
                 self.assertIn("removed", response)
         self.assertIn(
             "admin",
-            handle_command(".ping", self.tracker, "Ustudent").lower(),
+            handle_command("/ping", self.tracker, "Ustudent").lower(),
         )
 
     def test_admin_commands_require_permanent_user_id_allowlist(self) -> None:
         with mock.patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin,Uother"}):
             self.assertEqual(
-                handle_command(".ping", self.tracker, "Uadmin"),
+                handle_command("/ping", self.tracker, "Uadmin"),
                 "Pong! Attendance bot is online.",
             )
             self.assertIn(
                 "administrators only",
-                handle_command(".ping", self.tracker, "Ustudent"),
+                handle_command("/ping", self.tracker, "Ustudent"),
             )
 
     def test_admin_id_parser_handles_quoted_csv_and_environment_assignment(self) -> None:
@@ -60,7 +66,7 @@ class HandleCommandTests(unittest.TestCase):
         ):
             self.assertEqual(commands._admin_ids(), {"Uadmin", "Usecond"})
             self.assertEqual(
-                handle_command(".ping", self.tracker, "Uadmin"),
+                handle_command("/ping", self.tracker, "Uadmin"),
                 "Pong! Attendance bot is online.",
             )
 
@@ -73,17 +79,17 @@ class HandleCommandTests(unittest.TestCase):
                 commands.is_admin_user(" Uad570f7ac10f300ae23c2cd0a613719d ")
             )
             response = handle_command(
-                ".help",
+                "/help",
                 self.tracker,
                 "Uad570f7ac10f300ae23c2cd0a613719d",
             )
 
-        self.assertIn(".adminhelp", response)
+        self.assertIn("/adminhelp", response)
         self.assertNotIn("public command has been removed", response)
 
     def test_missing_admin_variable_returns_deployment_hint(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
-            response = handle_command(".ping", self.tracker, "Uadmin")
+            response = handle_command("/ping", self.tracker, "Uadmin")
 
         self.assertIn("not configured in this running bot", response)
 
@@ -94,7 +100,7 @@ class HandleCommandTests(unittest.TestCase):
             return_value={"type": "病假"},
         ) as get_record:
             response = handle_command(
-                ".statusme 2026-10-10",
+                "/statusme 2026-10-10",
                 self.tracker,
                 "U123",
                 student_id="S1",
@@ -113,7 +119,7 @@ class HandleCommandTests(unittest.TestCase):
             ) as delete_record,
         ):
             response = handle_command(
-                ".clear tomorrow",
+                "/clear tomorrow",
                 self.tracker,
                 "U123",
                 student_id="S1",
@@ -129,7 +135,7 @@ class HandleCommandTests(unittest.TestCase):
     def test_student_clear_does_not_allow_past_dates(self) -> None:
         with mock.patch.object(commands, "_today", return_value=date(2026, 10, 6)):
             response = handle_command(
-                ".clear 2026-10-05",
+                "/clear 2026-10-05",
                 self.tracker,
                 "U123",
                 student_id="S1",
@@ -153,7 +159,7 @@ class HandleCommandTests(unittest.TestCase):
             mock.patch.object(commands, "_today", return_value=date(2026, 10, 6)),
         ):
             response = handle_command(
-                '.set S1 personal 2026-10-10',
+                '/set S1 personal 2026-10-10',
                 self.tracker,
                 "Uadmin",
             )
@@ -172,7 +178,7 @@ class HandleCommandTests(unittest.TestCase):
             ) as find_student,
         ):
             response = handle_command(
-                '.set "杜 榮瑪" sick',
+                '/set "杜 榮瑪" sick',
                 self.tracker,
                 "Uadmin",
             )
@@ -199,7 +205,7 @@ class HandleCommandTests(unittest.TestCase):
             ),
         ):
             response = handle_command(
-                ".range S1 sick 2026-10-06 2026-10-11",
+                "/range S1 sick 2026-10-06 2026-10-11",
                 self.tracker,
                 "Uadmin",
             )
@@ -227,7 +233,7 @@ class HandleCommandTests(unittest.TestCase):
                 },
             ) as undo,
         ):
-            response = handle_command(".undo", self.tracker, "Uadmin")
+            response = handle_command("/undo", self.tracker, "Uadmin")
 
         self.assertIn("S1 / 2026-10-10", response)
         self.assertIn("病假 → no record", response)
@@ -243,7 +249,7 @@ class HandleCommandTests(unittest.TestCase):
             ) as report_data,
         ):
             self.assertEqual(
-                handle_command(".summary tomorrow", self.tracker, "Uadmin"),
+                handle_command("/summary tomorrow", self.tracker, "Uadmin"),
                 "formatted report",
             )
             report_data.assert_called_once_with(
@@ -295,7 +301,7 @@ class HandleCommandTests(unittest.TestCase):
             ),
         ):
             response = handle_command(
-                ".ticket I'm requesting a leave change.",
+                "/ticket I'm requesting a leave change.",
                 self.tracker,
                 "U123",
                 student_id="S1",

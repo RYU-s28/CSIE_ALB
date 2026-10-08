@@ -78,7 +78,27 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
     "no_bus": (
         "不坐公交車",
         "不坐公車",
+        "不搭公車",
+        "不搭公交車",
+        "沒辦法搭車",
+        "没办法搭车",
+        "無法搭車",
+        "无法搭车",
+        "沒搭到公車",
+        "没搭到公车",
+        "沒趕上公車",
+        "没赶上公车",
+        "missed the bus",
+        "didn't catch the bus",
+        "did not catch the bus",
+        "didn't catch up the bus",
+        "did not catch up the bus",
+        "won't be taking the bus",
+        "will not be taking the bus",
+        "won't take the bus",
+        "will not take the bus",
         "not taking the bus",
+        "not taking a bus",
         "no bus",
     ),
     "not_coming": (
@@ -185,16 +205,18 @@ def classify_status(message: str) -> ClassificationResult:
         "sick_leave",
         "personal_leave",
         "abroad",
-        "no_bus",
         "not_coming",
         "cancelled_work",
+        "no_bus",
         "late",
     )
 
     matched_status = None
     matched_keyword = None
     for status in priority:
-        for keyword in KEYWORDS[status]:
+        # Test longer phrases first so overlapping bus phrases keep the
+        # strongest, most specific match.
+        for keyword in sorted(KEYWORDS[status], key=len, reverse=True):
             if normalize_text(keyword) in text:
                 matched_status = status
                 matched_keyword = keyword
@@ -209,14 +231,13 @@ def classify_status(message: str) -> ClassificationResult:
         "生理假",
         "回國",
         "回菲律賓",
-        "不坐公交車",
-        "不坐公車",
         "不出來",
         "取消工讀",
         "取消打工",
         "遲到",
         "迟到",
     }
+    explicit_no_bus_notice = matched_status == "no_bus"
     has_leave_intent = (
         any(re.search(pattern, text) for pattern in LEAVE_INTENT_PATTERNS)
         or any(phrase in text for phrase in CHINESE_LEAVE_INTENT_PHRASES)
@@ -228,6 +249,8 @@ def classify_status(message: str) -> ClassificationResult:
     if matched_keyword is not None:
         checklist_score += 0.25
     if explicit_status_phrase:
+        checklist_score = max(checklist_score, 0.70)
+    if explicit_no_bus_notice:
         checklist_score = max(checklist_score, 0.70)
     confidence = min(checklist_score, 0.95)
     if confidence < MIN_ATTENDANCE_CONFIDENCE:

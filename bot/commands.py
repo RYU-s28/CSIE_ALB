@@ -68,11 +68,13 @@ SHEET_STATUS_TO_INTERNAL["待確認"] = "unknown"
 
 
 def normalize_command(text: str) -> str:
-    """Return the first command token, accepting dot or slash prefixes."""
+    """Return the first slash-prefixed command token."""
 
     cleaned = (text or "").strip()
+    if not cleaned.startswith("/"):
+        return ""
     first_token = cleaned.split(maxsplit=1)[0] if cleaned else ""
-    return first_token.removeprefix(".").removeprefix("/").lower()
+    return first_token.removeprefix("/").lower()
 
 
 def _today() -> date:
@@ -161,11 +163,11 @@ def _run_admin_command(tokens: list[str], actor: str) -> str:
         return "Pong! Attendance bot is online."
     if command in {"report", "summary"}:
         if len(args) > 1:
-            return f"Usage: .{command} [YYYY-MM-DD|today|tomorrow]"
+            return f"Usage: /{command} [YYYY-MM-DD|today|tomorrow]"
         return _report_data(_parse_date(args[0] if args else None), summary=command == "summary")
     if command == "status":
         if not 1 <= len(args) <= 2:
-            return "Usage: .status <student-id-or-exact-name> [date]"
+            return "Usage: /status <student-id-or-exact-name> [date]"
         student = google_sheets.find_student_by_id(args[0])
         if student is None:
             return "Student not found or name is ambiguous. Use the Student ID."
@@ -181,7 +183,7 @@ def _run_admin_command(tokens: list[str], actor: str) -> str:
         )
     if command == "set":
         if len(args) not in {2, 3}:
-            return "Usage: .set <student-id-or-quoted-name> <status> [date]"
+            return "Usage: /set <student-id-or-quoted-name> <status> [date]"
         student = google_sheets.find_student_by_id(args[0])
         if student is None:
             return "Student not found or name is ambiguous. Use the Student ID."
@@ -205,9 +207,9 @@ def _run_admin_command(tokens: list[str], actor: str) -> str:
         valid_lengths = {4} if command == "range" else {1, 2}
         if len(args) not in valid_lengths:
             usage = (
-                ".range <student> <status> <start-date> <end-date>"
+                "/range <student> <status> <start-date> <end-date>"
                 if command == "range"
-                else ".rm <student-id-or-quoted-name> [date]"
+                else "/rm <student-id-or-quoted-name> [date]"
             )
             return f"Usage: {usage}"
         student = google_sheets.find_student_by_id(args[0])
@@ -255,7 +257,7 @@ def _run_admin_command(tokens: list[str], actor: str) -> str:
         )
     if command == "undo":
         if args:
-            return "Usage: .undo"
+            return "Usage: /undo"
         undone = google_sheets.undo_last_attendance_action(actor)
         if undone is None:
             return "No attendance change is available to undo."
@@ -271,7 +273,7 @@ def _run_admin_command(tokens: list[str], actor: str) -> str:
         )
     if command == "tickets":
         if args:
-            return "Usage: .tickets"
+            return "Usage: /tickets"
         tickets = google_sheets.get_open_tickets()
         if not tickets:
             return "No open tickets."
@@ -296,12 +298,12 @@ def _run_admin_command(tokens: list[str], actor: str) -> str:
                 ticket_id, actor, close=action == "close",
             )
             return f"Ticket #{ticket_id} {'closed' if action == 'close' else 'reopened'}." if updated else "Ticket not found."
-        return "Usage: .ticket show <id> | .ticket close <id> | .ticket reopen <id>"
+        return "Usage: /ticket show <id> | /ticket close <id> | /ticket reopen <id>"
     return (
-        "Admin commands:\n.ping\n.report [date]\n.summary [date]\n"
-        ".status <student> [date]\n.set <student> <status> [date]\n"
-        ".rm <student> [date]\n.range <student> <status> <start> <end>\n"
-        ".undo\n.tickets\n.ticket show|close|reopen <id>\n.adminhelp"
+        "Admin commands:\n/ping\n/report [date]\n/summary [date]\n"
+        "/status <student> [date]\n/set <student> <status> [date]\n"
+        "/rm <student> [date]\n/range <student> <status> <start> <end>\n"
+        "/undo\n/tickets\n/ticket show|close|reopen <id>\n/adminhelp"
     )
 
 
@@ -316,7 +318,9 @@ def handle_command(
 ) -> str | None:
     del tracker, report_students, expected_students
     normalized_text = (text or "").strip()
-    command_text = normalized_text.removeprefix(".").removeprefix("/")
+    if not normalized_text.startswith("/"):
+        return None
+    command_text = normalized_text.removeprefix("/")
     command_word, separator, raw_args = command_text.partition(" ")
     command_name = command_word.lower()
     if command_name not in PUBLIC_COMMANDS | ADMIN_COMMANDS | {"help"}:
@@ -359,7 +363,7 @@ def handle_command(
             if command == "help":
                 return (
                     "That public command has been removed. "
-                    "Use .hello to see student commands."
+                    "Use /hello to see student commands."
                 )
             if not admins:
                 return (
@@ -382,18 +386,18 @@ def handle_command(
                 return "The command could not be completed. Please check its arguments or contact an administrator."
 
     if command in DISABLED_PUBLIC_COMMANDS:
-        return "That public command has been removed. Use .hello to see student commands."
+        return "That public command has been removed. Use /hello to see student commands."
 
     if command == "hello":
         return (
             "CSIE Attendance Bot\n\nYou can:\n"
-            ".statusme [date]\n.clear [date]\n"
-            ".ticket <message>\n\n"
+            "/statusme [date]\n/clear [date]\n"
+            "/ticket <message>\n\n"
             "Attendance changes must be handled by an administrator."
         )
     if command == "statusme":
         if len(args) > 1:
-            return "Usage: .statusme [date]"
+            return "Usage: /statusme [date]"
         if not student_id:
             return "Your LINE account is not linked to a student record. Please contact an administrator."
         try:
@@ -410,7 +414,7 @@ def handle_command(
         return f"{target_date.isoformat()}: {record.get('type', '待確認')}"
     if command == "clear":
         if len(args) > 1:
-            return "Usage: .clear [date]"
+            return "Usage: /clear [date]"
         if not student_id or not user_id:
             return "Your LINE account is not linked to a student record. Please contact an administrator."
         try:
@@ -436,7 +440,7 @@ def handle_command(
         if not user_id or not student_id:
             return "Your LINE account is not linked to a student record. Please contact an administrator."
         if not args:
-            return "Usage: .ticket <message>"
+            return "Usage: /ticket <message>"
         try:
             ticket_id = google_sheets.create_ticket(
                 student_id, user_id, args[0],

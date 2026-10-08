@@ -99,6 +99,22 @@ class AttendanceClassifierTests(unittest.TestCase):
                 self.assertEqual(result.status, expected_status)
                 self.assertGreaterEqual(result.confidence, 0.60)
 
+    def test_bus_transport_notices_are_classified_as_non_absence(self) -> None:
+        messages = (
+            "您好，不好意思，我今天沒辦法搭車回學校",
+            (
+                "I did not catch up the bus. I will be taking uber now to work. "
+                "Thank you for understanding."
+            ),
+            "I won't be taking the bus today because...",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_status(message)
+                self.assertEqual(result.status, "no_bus")
+                self.assertGreaterEqual(result.confidence, 0.60)
+                self.assertTrue(result.attendance_intent)
+
     def test_casual_keyword_mentions_do_not_create_attendance(self) -> None:
         for message in (
             "Good morning everyone",

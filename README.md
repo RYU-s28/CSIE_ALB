@@ -38,11 +38,13 @@ labels, and recognized categories receive the `Confirmed` status.
 Set `GEMINI_API_KEY` to enable staged AI attendance classification. Common
 greetings and reactions are ignored locally, and high-confidence Python
 classifications do not call Gemini. Uncertain attendance intent is checked by
-Gemini (`gemini-3.5-flash-lite`) using the Interactions API. Only a confirmed
-leave proceeds to category classification, where Python keywords are tried
+Gemini (`gemini-3.5-flash-lite`) using the Interactions API. Confirmed leave
+messages proceed to category classification, where Python keywords are tried
 first and Gemini is called only if Python cannot determine the category.
-`IGNORE` messages are not saved, `REVIEW` asks the sender to clarify, and only
-`LEAVE` proceeds through the existing identity, date, and Google Sheets flow.
+Messages about not taking or missing the bus are recorded as `不坐公交車`, not
+as leave, and do not reduce the attending count. `IGNORE` messages are not
+saved, `REVIEW` asks the sender to clarify, and confirmed leave or bus notices
+proceed through the existing identity, date, and Google Sheets flow.
 
 ## LINE commands
 
@@ -54,23 +56,24 @@ be pushed. The app schedules a daily report at 7:00 Asia/Taipei on dates
 accepted by the work calendar; if no destination is configured, it logs that
 the report was skipped.
 
-Students can use `.hello`, `.statusme [date]`, `.clear [date]`, and
-`.ticket <message>`. A student can withdraw only their own leave dated today or
+All bot commands start with `/` to distinguish them from ordinary chat.
+Students can use `/hello`, `/statusme [date]`, `/clear [date]`, and
+`/ticket <message>`. A student can withdraw only their own leave dated today or
 later. Each withdrawal is recorded in the `Audit Log` worksheet.
 
-Administrators can use `.ping`, `.report [date]`, `.summary [date]`,
-`.status <student> [date]`, `.set <student> <status> [date]`,
-`.rm <student> [date]`,
-`.range <student> <status> <start-date> <end-date>`, `.undo`, `.tickets`,
-`.ticket show|close|reopen <ticket-id>`, and `.adminhelp`. Student IDs are
+Administrators can use `/ping`, `/report [date]`, `/summary [date]`,
+`/status <student> [date]`, `/set <student> <status> [date]`,
+`/rm <student> [date]`,
+`/range <student> <status> <start-date> <end-date>`, `/undo`, `/tickets`,
+`/ticket show|close|reopen <ticket-id>`, and `/adminhelp`. Student IDs are
 preferred; a quoted exact name is accepted only when it identifies one active
 student. Dates accept `today`, `tomorrow`, or `YYYY-MM-DD`. Status aliases
 include `sick`, `personal`, `leave`, `late`, and `pending`; the sheet stores
-canonical Chinese labels. `.range` writes only dates selected by the current
+canonical Chinese labels. `/range` writes only dates selected by the current
 work calendar. Tickets are stored in a `Tickets` worksheet, and administrative
-attendance changes are recorded in `Audit Log` for `.undo`.
+attendance changes are recorded in `Audit Log` for `/undo`.
 
-`.report`, `.summary`, and the scheduled report use the same roster format:
+`/report`, `/summary`, and the scheduled report use the same roster format:
 date and weekday, expected and attending counts, followed only by non-empty
 attendance categories with each student's roster name. The attending count is
 the expected roster size minus students marked absent; "不坐公交車" is listed

@@ -13,6 +13,8 @@ LEAVE_TYPE_LABELS = {
     "sick_leave": "病假",
     "personal_leave": "事假",
     "menstrual_leave": "經痛",
+    "special_leave": "特休",
+    "half_day": "半天",
     "abroad": "回菲律賓",
     "no_bus": "不坐公交車",
     "not_coming": "不出來",

@@ -20,10 +20,7 @@ from linebot.v3.webhooks import (
 )
 
 from attendance.attendance import AttendanceTracker
-from attendance.classifier import (
-    MIN_ATTENDANCE_CONFIDENCE,
-    classify_status,
-)
+from attendance.ai_classifier import classify_attendance_message
 from attendance.leave_message import (
     LEAVE_TYPE_LABELS,
     parse_attendance_date,
@@ -359,17 +356,24 @@ def handle_message(event):
         )
         return
 
-    classification = classify_status(text)
-    if (
-        (
-            classification.status == "unknown"
-            and not classification.attendance_intent
+    if not text.strip():
+        return
+
+    try:
+        classification = classify_attendance_message(text)
+    except Exception as error:
+        import traceback
+
+        print("ATTENDANCE AI CLASSIFICATION ERROR:", repr(error))
+        traceback.print_exc()
+        reply_to_line(
+            event.reply_token,
+            "I couldn't classify this attendance message. Please try again "
+            "or contact an administrator.",
         )
-        or (
-            classification.status != "unknown"
-            and classification.confidence < MIN_ATTENDANCE_CONFIDENCE
-        )
-    ):
+        return
+
+    if classification.status == "unrelated":
         print(
             "Non-attendance LINE message ignored:",
             f"confidence={classification.confidence:.2f}",
@@ -450,6 +454,7 @@ def handle_message(event):
             student_id=student_work_id,
             message=text,
             attendance_date=attendance_date,
+            classification_result=classification,
         )
 
         if not append_attendance_row([

@@ -10,3 +10,4 @@ python-dotenv
 APScheduler>=3.11,<4
 gspread
 google-auth
+google-genai

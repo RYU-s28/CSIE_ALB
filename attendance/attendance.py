@@ -15,6 +15,8 @@ VALID_STATUSES = {
     "sick_leave",
     "personal_leave",
     "menstrual_leave",
+    "special_leave",
+    "half_day",
     "abroad",
     "no_bus",
     "not_coming",
@@ -65,10 +67,11 @@ class AttendanceTracker:
         message: str,
         *,
         attendance_date: date | None = None,
+        classification_result: ClassificationResult | None = None,
     ) -> AttendanceRecord:
         """Classify a LINE message and save the resulting attendance status."""
 
-        result: ClassificationResult = classify_status(message)
+        result = classification_result or classify_status(message)
 
         record = AttendanceRecord(
             student_id=student_id,

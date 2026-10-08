@@ -1,6 +1,7 @@
 import unittest
 
 from attendance.classifier import (
+    ClassificationResult,
     MIN_ATTENDANCE_CONFIDENCE,
     classify_status,
 )
@@ -47,11 +48,44 @@ class AttendanceClassifierTests(unittest.TestCase):
         self.assertEqual(record.status, "unknown")
         self.assertTrue(record.attendance_intent)
 
+    def test_tracker_saves_the_classification_supplied_by_ai_fallback(self) -> None:
+        ai_result = ClassificationResult(
+            status="special_leave",
+            confidence=0.8,
+            attendance_intent=True,
+        )
+        record = AttendanceTracker().add_from_message(
+            "student-1",
+            "I will be out for annual leave",
+            classification_result=ai_result,
+        )
+
+        self.assertEqual(record.status, "special_leave")
+        self.assertEqual(record.confidence, 0.8)
+        self.assertTrue(record.attendance_intent)
+
     def test_explicit_chinese_leave_status_is_actionable(self) -> None:
         result = classify_status("明天病假")
 
         self.assertEqual(result.status, "sick_leave")
         self.assertGreaterEqual(result.confidence, 0.60)
+
+    def test_partial_day_takes_priority_over_stated_leave_reason(self) -> None:
+        result = classify_status(
+            "I'm having period cramps. I won't work this afternoon."
+        )
+
+        self.assertEqual(result.status, "half_day")
+        self.assertTrue(result.attendance_intent)
+
+    def test_half_day_phrase_is_classified_by_python_rules(self) -> None:
+        for message in (
+            "I need the morning off",
+            "I will take a half day off",
+            "下午請假",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(classify_status(message).status, "half_day")
 
     def test_explicit_roster_attendance_categories_are_actionable(self) -> None:
         cases = {

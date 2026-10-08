@@ -125,6 +125,29 @@ class AttendanceReportTests(unittest.TestCase):
         self.assertIn("實到人數：2", report)
         self.assertIn("待確認：2人", report)
 
+    def test_ai_categories_are_reported_as_attendance_absences(self) -> None:
+        report = build_report(
+            report_date=date(2026, 10, 6),
+            total_students=2,
+            expected_students=2,
+            records=[
+                AttendanceRecord(
+                    student_id="1",
+                    status="special_leave",
+                    attendance_date=date(2026, 10, 6),
+                ),
+                AttendanceRecord(
+                    student_id="2",
+                    status="half_day",
+                    attendance_date=date(2026, 10, 6),
+                ),
+            ],
+        )
+
+        self.assertIn("實到人數：0", report)
+        self.assertIn("特休：1人\n@1", report)
+        self.assertIn("半天：1人\n@2", report)
+
 
 if __name__ == "__main__":
     unittest.main()

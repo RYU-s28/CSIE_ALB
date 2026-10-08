@@ -112,6 +112,8 @@ LEAVE_INTENT_PATTERNS = (
     r"\b(?:will not be working|won't be working|can't come|cannot come|"
     r"will not come|won't come|not coming)\b",
     r"\b(?:take|taking|requesting)\s+(?:a\s+)?leave\b",
+    r"\b(?:need|take|taking|request|requesting)\s+"
+    r"(?:a\s+|the\s+)?(?:morning|afternoon|half[- ]day)\s+off\b",
     r"\b(?:i am|i'm|was|will be|arrived)\s+late\b",
 )
 CHINESE_LEAVE_INTENT_PHRASES = (
@@ -133,12 +135,33 @@ CHINESE_LEAVE_INTENT_PHRASES = (
     "今天不来",
     "明天不來",
     "明天不来",
+    "半天請假",
+    "半天请假",
+    "上午請假",
+    "上午请假",
+    "下午請假",
+    "下午请假",
+    "上午不上班",
+    "下午不上班",
 )
 NEGATED_LEAVE_PATTERNS = (
     r"\b(?:not|don't|do not|doesn't|does not|won't|will not|never)\s+"
     r"(?:be\s+)?(?:taking|take|requesting|request|need|apply for)\s+"
     r"(?:a\s+)?(?:sick|personal|menstrual|medical)?\s*leave\b",
     r"\bno\s+(?:sick|personal|menstrual|medical)?\s*leave\b",
+)
+PARTIAL_DAY_KEYWORDS = (
+    "half-day",
+    "half day",
+    "morning",
+    "afternoon",
+    "半天",
+    "半日",
+    "上午",
+    "早上",
+    "下午",
+    "午後",
+    "午后",
 )
 
 
@@ -205,6 +228,21 @@ def classify_status(message: str) -> ClassificationResult:
     confidence = min(checklist_score, 0.95)
     if confidence < MIN_ATTENDANCE_CONFIDENCE:
         return _unknown_result()
+
+    if has_leave_intent and any(
+        keyword in text for keyword in PARTIAL_DAY_KEYWORDS
+    ):
+        partial_day_keyword = next(
+            keyword
+            for keyword in PARTIAL_DAY_KEYWORDS
+            if keyword in text
+        )
+        return ClassificationResult(
+            status="half_day",
+            confidence=confidence,
+            matched_keyword=partial_day_keyword,
+            attendance_intent=True,
+        )
 
     if matched_status is None:
         return _unknown_result(attendance_intent=has_leave_intent)

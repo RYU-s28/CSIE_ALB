@@ -35,6 +35,12 @@ The attendance date parser recognizes today/tomorrow phrases and explicit dates
 such as `2026-10-07`. Leave categories are written with the configured Chinese
 labels, and recognized categories receive the `Confirmed` status.
 
+Set `GEMINI_API_KEY` to enable AI classification for messages the Python
+keyword classifier cannot confidently categorize. Gemini uses
+`gemini-2.5-flash`; messages confidently classified by Python do not make an
+AI request. The AI fallback validates its JSON category before the existing
+LINE identity, attendance-date, and Google Sheets write flow continues.
+
 ## LINE commands
 
 Set `ADMIN_LINE_USER_IDS` to a comma-separated list of administrator LINE

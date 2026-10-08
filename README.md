@@ -63,8 +63,17 @@ later. Each withdrawal is recorded in the `Audit Log` worksheet.
 In a LINE chat, `/hello` and `/help` show a Flex welcome card with Quick Reply
 buttons for personal status, help, and contacting an administrator. Personal
 status is only returned in a private chat; using the status button in a group
-directs the student to private chat instead. Rich Menu integration and
-confirmation before withdrawing leave are not included yet.
+sends the result by private message when LINE allows it. A persistent Rich Menu
+is not set up yet.
+
+After a leave record is successfully written, the bot sends a Flex confirmation
+card with the saved category, date, and stable attendance record ID. Existing
+attendance sheets are extended with an `attendance_record_id` column, and
+legacy rows receive generated IDs. The card's status and correction actions work
+only for the linked student in a private chat. Correction requests are added to
+the existing administrator ticket queue. Leave withdrawal requires a signed,
+10-minute confirmation and deletes only the exact owned record after checking
+that it is still present and withdrawable.
 
 Administrators can use `/ping`, `/report [date]`, `/summary [date]`,
 `/status <student> [date]`, `/set <student> <status> [date]`,

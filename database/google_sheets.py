@@ -36,6 +36,7 @@ ATTENDANCE_HEADERS = [
     "status",
     "raw_message",
     "attendance_intent",
+    "attendance_record_id",
 ]
 LOGS_HEADERS = [
     "Work ID",
@@ -45,6 +46,7 @@ LOGS_HEADERS = [
     "Status",
     "Raw Message",
     "Attendance Intent",
+    "Attendance Record ID",
 ]
 AUDIT_HEADERS = [
     "Action ID",
@@ -488,6 +490,9 @@ def _attendance_header_layout():
         "status": "status",
         "raw_message": "raw_message",
         "rawmessage": "raw_message",
+        "attendance_record_id": "attendance_record_id",
+        "record_id": "attendance_record_id",
+        "attendance_recordid": "attendance_record_id",
     }
     columns = {
         aliases.get(header, header): start_column + offset + 1
@@ -551,7 +556,71 @@ def _attendance_header_layout():
                 values=intent_values,
                 value_input_option="RAW",
             )
+    record_id_column_added = "attendance_record_id" not in columns
+    if record_id_column_added:
+        last_header_column = max(
+            (
+                index + 1
+                for index, value in enumerate(rows[header_row - 1])
+                if str(value).strip()
+            ),
+            default=max(columns.values()),
+        )
+        record_id_column = last_header_column + 1
+        sheet.update(
+            range_name=(
+                f"{_column_letter(record_id_column)}{header_row}:"
+                f"{_column_letter(record_id_column)}{header_row}"
+            ),
+            values=[["attendance_record_id"]],
+            value_input_option="RAW",
+        )
+        columns["attendance_record_id"] = record_id_column
+        header_values = rows[header_row - 1]
+        header_values.extend([""] * (record_id_column - len(header_values)))
+        header_values[record_id_column - 1] = "attendance_record_id"
+    else:
+        record_id_column = columns["attendance_record_id"]
+
+    record_id_values = []
+    seen_record_ids: set[str] = set()
+    record_ids_changed = record_id_column_added
+    for row in rows[header_row:]:
+        has_student = (
+            columns["student_id"] - 1 < len(row)
+            and bool(str(row[columns["student_id"] - 1]).strip())
+        )
+        existing_id = (
+            str(row[record_id_column - 1]).strip()
+            if record_id_column - 1 < len(row)
+            else ""
+        )
+        record_id = existing_id
+        if has_student and (not record_id or record_id in seen_record_ids):
+            record_id = _new_attendance_record_id()
+            record_ids_changed = True
+        if record_id:
+            seen_record_ids.add(record_id)
+        record_id_values.append([record_id])
+    if record_id_values and record_ids_changed:
+        sheet.update(
+            range_name=(
+                f"{_column_letter(record_id_column)}{header_row + 1}:"
+                f"{_column_letter(record_id_column)}{header_row + len(record_id_values)}"
+            ),
+            values=record_id_values,
+            value_input_option="RAW",
+        )
+        for row, (record_id,) in zip(rows[header_row:], record_id_values):
+            row.extend([""] * (record_id_column - len(row)))
+            row[record_id_column - 1] = record_id
     return sheet, rows, header_row, columns
+
+
+def _new_attendance_record_id() -> str:
+    """Return a stable, opaque identifier suitable for LINE postbacks."""
+
+    return f"ATT-{uuid4().hex[:16].upper()}"
 
 
 def _attendance_row_values(
@@ -600,6 +669,20 @@ def get_attendance_record(student_id: str, target_date: date) -> dict[str, str] 
         if row.get("student_id") == student_id
     ]
     return matches[-1] if matches else None
+
+
+def get_attendance_record_by_id(record_id: str) -> dict[str, str] | None:
+    """Find an attendance row by its stable record ID."""
+
+    if not record_id:
+        return None
+    return next(
+        (
+            row for row in get_attendance_rows()
+            if row.get("attendance_record_id") == record_id
+        ),
+        None,
+    )
 
 
 def _append_audit(
@@ -668,6 +751,11 @@ def upsert_attendance_record(
         "type": status,
         "status": "Confirmed",
         "raw_message": raw_message,
+        "attendance_record_id": (
+            previous.get("attendance_record_id")
+            if previous
+            else _new_attendance_record_id()
+        ),
     }
     action = "UPDATE" if previous else "INSERT"
     action_id = _append_audit(
@@ -714,7 +802,12 @@ def upsert_attendance_record(
     except Exception:
         _mark_audit_action(action_id, "FAILED", "Attendance write failed.")
         raise
-    return {"action": action, "old_status": old_status, "action_id": action_id}
+    return {
+        "action": action,
+        "old_status": old_status,
+        "action_id": action_id,
+        "attendance_record_id": str(values_by_header["attendance_record_id"]),
+    }
 
 
 def _column_letter(column: int) -> str:
@@ -731,13 +824,30 @@ def delete_attendance_record(
     actor_line_user_id: str,
     *,
     leave_only: bool = False,
+    attendance_record_id: str | None = None,
 ) -> dict[str, str] | None:
     """Remove one entry and preserve its prior value in the audit sheet."""
 
-    previous = get_attendance_record(student_id, target_date)
+    previous = (
+        get_attendance_record_by_id(attendance_record_id)
+        if attendance_record_id
+        else get_attendance_record(student_id, target_date)
+    )
     if previous is None:
         return None
-    if leave_only and previous.get("type") not in {"病假", "事假", "經痛", "回菲律賓"}:
+    if (
+        previous.get("student_id") != student_id
+        or previous.get("date") != target_date.isoformat()
+    ):
+        return None
+    if leave_only and previous.get("type") not in {
+        "病假",
+        "事假",
+        "經痛",
+        "特休",
+        "半天",
+        "回菲律賓",
+    }:
         return None
     sheet, _, _, _ = _attendance_header_layout()
     row_number = int(previous["_row_number"])
@@ -936,19 +1046,21 @@ def update_ticket(ticket_id: str, actor_line_user_id: str, *, close: bool) -> bo
     return False
 
 
-def append_attendance_row(values: list[object]) -> bool:
-    """Append attendance under the configured table headers."""
+def append_attendance_row(values: list[object]) -> str | None:
+    """Append attendance under the configured table headers and return its ID."""
 
-    if len(values) not in {6, 7}:
-        raise ValueError("Attendance rows must contain six or seven values.")
+    if len(values) not in {6, 7, 8}:
+        raise ValueError("Attendance rows must contain six, seven, or eight values.")
     student_id, student_name, day, attendance_type, status, raw_message = values[:6]
-    attendance_intent = values[6] if len(values) == 7 else False
+    attendance_intent = values[6] if len(values) >= 7 else False
+    record_id = str(values[7]).strip() if len(values) == 8 else ""
+    record_id = record_id or _new_attendance_record_id()
     if not str(student_id).strip() or not str(student_name).strip():
         raise ValueError("Attendance rows require both Work ID and student name.")
 
     sheet = ensure_attendance_sheet()
     if sheet is None:
-        return False
+        return None
 
     _, rows, header_row, columns = _attendance_header_layout()
     ordered_values = _attendance_row_values(
@@ -961,6 +1073,7 @@ def append_attendance_row(values: list[object]) -> bool:
             "status": status,
             "raw_message": raw_message,
             "attendance_intent": attendance_intent,
+            "attendance_record_id": record_id,
         },
     )
     last_data_row = header_row
@@ -983,4 +1096,4 @@ def append_attendance_row(values: list[object]) -> bool:
         values=[ordered_values],
         value_input_option="RAW",
     )
-    return True
+    return record_id

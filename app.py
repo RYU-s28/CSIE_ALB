@@ -1,9 +1,15 @@
+import hashlib
+import hmac
 import os
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from collections.abc import AsyncGenerator
+from datetime import date, datetime
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
+from urllib.parse import parse_qs
+from zoneinfo import ZoneInfo
 
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -12,6 +18,7 @@ from linebot.v3.messaging import (
     Configuration,
     FlexMessage,
     MessagingApi,
+    PushMessageRequest,
     ReplyMessageRequest,
     TextMessage,
 )
@@ -29,10 +36,18 @@ from attendance.leave_message import (
 )
 from bot.commands import handle_command, is_admin_user, normalize_command
 from bot.line_ui import welcome_message
+from ui.leave_confirmation import (
+    attendance_status_message,
+    leave_confirmation_message,
+    withdrawal_confirmation_message,
+)
 from database.google_sheets import (
     append_attendance_row,
+    create_ticket,
+    delete_attendance_record,
     find_students_by_display_name,
     find_student_by_line_user_id,
+    get_attendance_record_by_id,
     LineRegistrationConflictError,
     register_line_user,
 )
@@ -149,6 +164,26 @@ def reply_to_line(reply_token: str, message: str | FlexMessage):
             "LINE REPLY ERROR:",
             repr(error),
         )
+
+
+def push_to_line(user_id: str, message: str | FlexMessage) -> bool:
+    """Send private attendance details without exposing them in a group."""
+
+    try:
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            messaging_api.push_message(
+                push_message_request=PushMessageRequest(
+                    to=user_id,
+                    messages=[
+                        TextMessage(text=message) if isinstance(message, str) else message
+                    ],
+                )
+            )
+        return True
+    except Exception as error:
+        print("LINE PUSH ERROR:", repr(error))
+        return False
 
 
 def get_line_display_name(
@@ -475,7 +510,7 @@ def handle_message(event):
             classification_result=classification,
         )
 
-        if not append_attendance_row([
+        attendance_record_id = append_attendance_row([
             record.student_id,
             student_name,
             record.attendance_date.isoformat(),
@@ -485,7 +520,8 @@ def handle_message(event):
             else "Pending",
             record.message,
             record.attendance_intent,
-        ]):
+        ])
+        if attendance_record_id is None:
             reply_to_line(
                 event.reply_token,
                 "Google Sheets is not configured yet. Please contact an administrator.",
@@ -493,13 +529,28 @@ def handle_message(event):
             print("Attendance write skipped because spreadsheet config is unavailable.")
             return
 
-        # Temporarily hidden: suppress LINE attendance-save confirmation replies.
-        # reply_to_line(
-        #     event.reply_token,
-        #     f"Attendance saved for {student_name}: "
-        #     f"{LEAVE_TYPE_LABELS[record.status]} on "
-        #     f"{record.attendance_date.isoformat()}.",
-        # )
+        category = LEAVE_TYPE_LABELS[record.status]
+        leave_categories = {
+            "病假",
+            "事假",
+            "經痛",
+            "特休",
+            "半天",
+            "回菲律賓",
+            "待確認",
+        }
+        if category in leave_categories:
+            reply_to_line(
+                event.reply_token,
+                leave_confirmation_message(
+                    student_name=student_name,
+                    leave_date=record.attendance_date.strftime("%Y/%m/%d"),
+                    category=category,
+                    record_id=attendance_record_id,
+                    confirmed=classification.status != "unknown",
+                    withdrawable=category != "待確認",
+                ),
+            )
 
         print("CLASSIFICATION:", record.status)
         print("CONFIDENCE:", record.confidence)
@@ -521,26 +572,20 @@ def handle_message(event):
 
 @handler.add(PostbackEvent)
 def handle_postback(event):
-    """Route welcome-card actions through existing, identity-aware commands."""
+    """Route card actions after validating identity and the exact record."""
 
-    action = str(getattr(event.postback, "data", "") or "")
+    data = parse_qs(str(getattr(event.postback, "data", "") or ""))
+    action = data.get("action", [""])[0]
+    record_id = data.get("record_id", [""])[0]
     user_id = str(getattr(event.source, "user_id", None) or "").strip() or None
     group_id = getattr(event.source, "group_id", None)
     room_id = getattr(event.source, "room_id", None)
 
-    if action == "action=help":
+    if action == "help":
         reply_to_line(event.reply_token, welcome_message())
         return
 
-    if action == "action=statusme":
-        if group_id or room_id:
-            reply_to_line(
-                event.reply_token,
-                "For privacy, please open a private chat with CSIE Attendance "
-                "and choose My Status there.",
-            )
-            return
-
+    if action == "statusme":
         student_id = None
         if user_id:
             try:
@@ -561,10 +606,23 @@ def handle_postback(event):
             print("POSTBACK COMMAND ERROR:", repr(error))
             response = "The request could not be completed. Please contact an administrator."
         if response is not None:
-            reply_to_line(event.reply_token, response)
+            if (group_id or room_id) and user_id:
+                if push_to_line(user_id, response):
+                    reply_to_line(
+                        event.reply_token,
+                        "I sent your status in a private message.",
+                    )
+                else:
+                    reply_to_line(
+                        event.reply_token,
+                        "For privacy, I couldn't send your status here. Please "
+                        "open a private chat with CSIE Attendance and choose My Status.",
+                    )
+            else:
+                reply_to_line(event.reply_token, response)
         return
 
-    if action == "action=contact":
+    if action == "contact":
         reply_to_line(
             event.reply_token,
             "To contact an administrator, send /ticket followed by your "
@@ -572,4 +630,174 @@ def handle_postback(event):
         )
         return
 
-    print("Unknown LINE postback action:", action)
+    if action == "cancel_withdraw":
+        reply_to_line(event.reply_token, "Your leave was not withdrawn.")
+        return
+
+    if action not in {"status", "correction", "withdraw", "confirm_withdraw"}:
+        print("Unknown LINE postback action:", action)
+        return
+
+    if not user_id or not record_id:
+        reply_to_line(
+            event.reply_token,
+            "This attendance action is invalid or has expired. Please check "
+            "your status again.",
+        )
+        return
+
+    try:
+        attendance = get_attendance_record_by_id(record_id)
+        student = find_student_by_line_user_id(user_id)
+    except Exception as error:
+        print("ATTENDANCE POSTBACK LOOKUP ERROR:", repr(error))
+        reply_to_line(
+            event.reply_token,
+            "I couldn't retrieve this attendance record. Please contact an administrator.",
+        )
+        return
+    if (
+        attendance is None
+        or student is None
+        or str(student.get("student_id", "")) != attendance.get("student_id")
+    ):
+        reply_to_line(
+            event.reply_token,
+            "This attendance record is unavailable or does not belong to your account.",
+        )
+        return
+
+    attendance_date = date.fromisoformat(attendance["date"])
+    category = attendance.get("type", "待確認")
+    if action == "status":
+        status_card = attendance_status_message(
+            category=category,
+            leave_date=attendance_date.strftime("%Y/%m/%d"),
+            record_id=record_id,
+        )
+        if group_id or room_id:
+            if push_to_line(user_id, status_card):
+                reply_to_line(
+                    event.reply_token,
+                    "I sent your status in a private message.",
+                )
+            else:
+                reply_to_line(
+                    event.reply_token,
+                    "For privacy, I couldn't send your status here. Please "
+                    "open a private chat with CSIE Attendance.",
+                )
+        else:
+            reply_to_line(event.reply_token, status_card)
+        return
+
+    if action == "correction":
+        try:
+            ticket_id = create_ticket(
+                str(student["student_id"]),
+                user_id,
+                (
+                    f"Correction request for attendance record {record_id} "
+                    f"({attendance_date.isoformat()}, {category}). "
+                    "Please review this saved attendance and contact the student "
+                    "to confirm the requested correction."
+                ),
+            )
+        except Exception as error:
+            print("ATTENDANCE CORRECTION REQUEST ERROR:", repr(error))
+            reply_to_line(
+                event.reply_token,
+                "Your correction request could not be submitted. Please try "
+                "again or contact an administrator.",
+            )
+            return
+        reply_to_line(
+            event.reply_token,
+            f"Correction request #{ticket_id} was sent to an administrator for review.",
+        )
+        return
+
+    if action == "withdraw":
+        if attendance_date < _today_taipei():
+            reply_to_line(
+                event.reply_token,
+                "Past attendance records cannot be withdrawn from this card. "
+                "Please contact an administrator.",
+            )
+            return
+        expires = int(time.time()) + 600
+        signature = _withdrawal_signature(record_id, user_id, expires)
+        confirm_data = (
+            f"action=confirm_withdraw&record_id={record_id}"
+            f"&expires={expires}&token={signature}"
+        )
+        reply_to_line(
+            event.reply_token,
+            withdrawal_confirmation_message(
+                category=category,
+                leave_date=attendance_date.strftime("%Y/%m/%d"),
+                record_id=record_id,
+                confirmation_data=confirm_data,
+            ),
+        )
+        return
+
+    if action == "confirm_withdraw":
+        expires_text = data.get("expires", [""])[0]
+        token = data.get("token", [""])[0]
+        try:
+            expires = int(expires_text)
+        except ValueError:
+            expires = 0
+        expected_signature = _withdrawal_signature(record_id, user_id, expires)
+        if (
+            expires < int(time.time())
+            or not token
+            or not hmac.compare_digest(token, expected_signature)
+            or attendance_date < _today_taipei()
+        ):
+            reply_to_line(
+                event.reply_token,
+                "This withdrawal confirmation has expired or is invalid. "
+                "Please start again from the attendance card.",
+            )
+            return
+        try:
+            deleted = delete_attendance_record(
+                str(student["student_id"]),
+                attendance_date,
+                user_id,
+                leave_only=True,
+                attendance_record_id=record_id,
+            )
+        except Exception as error:
+            print("ATTENDANCE WITHDRAWAL ERROR:", repr(error))
+            reply_to_line(
+                event.reply_token,
+                "I couldn't withdraw this leave. Please contact an administrator.",
+            )
+            return
+        if deleted is None:
+            reply_to_line(
+                event.reply_token,
+                "This leave is no longer available to withdraw.",
+            )
+            return
+        reply_to_line(
+            event.reply_token,
+            f"Your leave for {attendance_date.strftime('%Y/%m/%d')} "
+            f"({category}) was withdrawn.",
+        )
+
+
+def _withdrawal_signature(record_id: str, user_id: str, expires: int) -> str:
+    payload = f"{record_id}|{user_id}|{expires}".encode()
+    return hmac.new(
+        str(CHANNEL_SECRET).encode(),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _today_taipei() -> date:
+    return datetime.now(ZoneInfo("Asia/Taipei")).date()

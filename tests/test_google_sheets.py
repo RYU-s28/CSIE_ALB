@@ -285,12 +285,17 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
         ):
             appended = google_sheets.append_attendance_row(values)
 
-        self.assertTrue(appended)
-        self.assertEqual(sheet.updated, ("B9:H9", [values], "RAW"))
+        self.assertRegex(appended, r"^ATT-[0-9A-F]{16}$")
+        self.assertEqual(sheet.updated[0], "B9:I9")
+        self.assertEqual(sheet.updated[1][0][:7], values)
+        self.assertEqual(sheet.updated[1][0][7], appended)
         self.assertEqual(
             sheet.updates[0],
             ("H4:H4", [["attendance_intent"]], "RAW"),
         )
+        self.assertEqual(sheet.updates[2][0], "I4:I4")
+        self.assertEqual(sheet.updates[2][1], [["attendance_record_id"]])
+        self.assertTrue(sheet.updates[3][0].startswith("I5:I8"))
 
     def test_attendance_header_scan_finds_legacy_table_position(self) -> None:
         import database.google_sheets as google_sheets
@@ -439,7 +444,7 @@ class GoogleSheetsLazyInitTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "UPDATE")
         self.assertEqual(result["old_status"], "病假")
-        self.assertEqual(sheet.updated[0], "A2:G2")
+        self.assertEqual(sheet.updated[0], "A2:H2")
         self.assertEqual(sheet.updated[1][0][3], "事假")
 
     def test_student_leave_removal_is_restricted_to_leave_rows(self) -> None:

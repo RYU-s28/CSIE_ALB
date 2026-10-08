@@ -22,7 +22,7 @@ ADMIN_COMMANDS = {
     "ping", "report", "summary", "status", "set", "rm", "range",
     "undo", "tickets", "adminhelp",
 }
-DISABLED_PUBLIC_COMMANDS = {"help", "attendance", "absent"}
+DISABLED_PUBLIC_COMMANDS = {"attendance", "absent"}
 STATUS_ALIASES = {
     "病假": "病假",
     "sick": "病假",
@@ -323,7 +323,9 @@ def handle_command(
     command_text = normalized_text.removeprefix("/")
     command_word, separator, raw_args = command_text.partition(" ")
     command_name = command_word.lower()
-    if command_name not in PUBLIC_COMMANDS | ADMIN_COMMANDS | {"help"}:
+    if command_name not in (
+        PUBLIC_COMMANDS | ADMIN_COMMANDS | DISABLED_PUBLIC_COMMANDS | {"help"}
+    ):
         return None
 
     admins = _admin_ids()
@@ -349,7 +351,7 @@ def handle_command(
     admin_command_request = (
         command in ADMIN_COMMANDS
         or admin_ticket_action
-        or command == "help"
+        or (command == "help" and is_admin)
     )
     if admin_command_request:
         if not is_admin:
@@ -390,10 +392,20 @@ def handle_command(
 
     if command == "hello":
         return (
-            "CSIE Attendance Bot\n\nYou can:\n"
+            "CSIE Attendance Bot\n\n"
+            "Leave notifications are recognized automatically. You can:\n"
             "/statusme [date]\n/clear [date]\n"
             "/ticket <message>\n\n"
-            "Attendance changes must be handled by an administrator."
+            "Use /help to see these options. Attendance changes must be "
+            "handled by an administrator."
+        )
+    if command == "help":
+        return (
+            "Student help:\n"
+            "• Leave notifications are recognized automatically.\n"
+            "• Check status with /statusme [date].\n"
+            "• Contact an administrator with /ticket <message>.\n"
+            "• Use /clear [date] to withdraw today's or a future leave."
         )
     if command == "statusme":
         if len(args) > 1:

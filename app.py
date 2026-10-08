@@ -10,12 +10,14 @@ from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     ApiClient,
     Configuration,
+    FlexMessage,
     MessagingApi,
     ReplyMessageRequest,
     TextMessage,
 )
 from linebot.v3.webhooks import (
     MessageEvent,
+    PostbackEvent,
     TextMessageContent,
 )
 
@@ -25,7 +27,8 @@ from attendance.leave_message import (
     LEAVE_TYPE_LABELS,
     parse_attendance_date,
 )
-from bot.commands import handle_command, normalize_command
+from bot.commands import handle_command, is_admin_user, normalize_command
+from bot.line_ui import welcome_message
 from database.google_sheets import (
     append_attendance_row,
     find_students_by_display_name,
@@ -125,7 +128,7 @@ async def callback(
 # --------------------------------------------------
 # LINE message handler
 # --------------------------------------------------
-def reply_to_line(reply_token: str, message: str):
+def reply_to_line(reply_token: str, message: str | FlexMessage):
     try:
         with ApiClient(configuration) as api_client:
             messaging_api = MessagingApi(api_client)
@@ -133,7 +136,7 @@ def reply_to_line(reply_token: str, message: str):
             reply_request = ReplyMessageRequest(
                 reply_token=reply_token,
                 messages=[
-                    TextMessage(text=message)
+                    TextMessage(text=message) if isinstance(message, str) else message
                 ],
             )
 
@@ -319,6 +322,12 @@ def handle_message(event):
     text = event.message.text or ""
 
     user_id = str(getattr(event.source, "user_id", None) or "").strip() or None
+    requested_command = normalize_command(text)
+    if requested_command == "hello" or (
+        requested_command == "help" and not is_admin_user(user_id)
+    ):
+        reply_to_line(event.reply_token, welcome_message())
+        return
 
     group_id = getattr(
         event.source,
@@ -484,12 +493,13 @@ def handle_message(event):
             print("Attendance write skipped because spreadsheet config is unavailable.")
             return
 
-        reply_to_line(
-            event.reply_token,
-            f"Attendance saved for {student_name}: "
-            f"{LEAVE_TYPE_LABELS[record.status]} on "
-            f"{record.attendance_date.isoformat()}.",
-        )
+        # Temporarily hidden: suppress LINE attendance-save confirmation replies.
+        # reply_to_line(
+        #     event.reply_token,
+        #     f"Attendance saved for {student_name}: "
+        #     f"{LEAVE_TYPE_LABELS[record.status]} on "
+        #     f"{record.attendance_date.isoformat()}.",
+        # )
 
         print("CLASSIFICATION:", record.status)
         print("CONFIDENCE:", record.confidence)
@@ -507,3 +517,59 @@ def handle_message(event):
             event.reply_token,
             "I couldn't save your attendance. Please try again or contact an administrator.",
         )
+
+
+@handler.add(PostbackEvent)
+def handle_postback(event):
+    """Route welcome-card actions through existing, identity-aware commands."""
+
+    action = str(getattr(event.postback, "data", "") or "")
+    user_id = str(getattr(event.source, "user_id", None) or "").strip() or None
+    group_id = getattr(event.source, "group_id", None)
+    room_id = getattr(event.source, "room_id", None)
+
+    if action == "action=help":
+        reply_to_line(event.reply_token, welcome_message())
+        return
+
+    if action == "action=statusme":
+        if group_id or room_id:
+            reply_to_line(
+                event.reply_token,
+                "For privacy, please open a private chat with CSIE Attendance "
+                "and choose My Status there.",
+            )
+            return
+
+        student_id = None
+        if user_id:
+            try:
+                student = find_student_by_line_user_id(user_id)
+                if student:
+                    student_id = str(student["student_id"])
+            except Exception as error:
+                print("STUDENT LOOKUP ERROR:", repr(error))
+
+        try:
+            response = handle_command(
+                "/statusme",
+                tracker,
+                user_id,
+                student_id=student_id,
+            )
+        except Exception as error:
+            print("POSTBACK COMMAND ERROR:", repr(error))
+            response = "The request could not be completed. Please contact an administrator."
+        if response is not None:
+            reply_to_line(event.reply_token, response)
+        return
+
+    if action == "action=contact":
+        reply_to_line(
+            event.reply_token,
+            "To contact an administrator, send /ticket followed by your "
+            "request in a private chat with CSIE Attendance.",
+        )
+        return
+
+    print("Unknown LINE postback action:", action)

@@ -60,6 +60,11 @@ All bot commands start with `/` to distinguish them from ordinary chat.
 Students can use `/hello`, `/statusme [date]`, `/clear [date]`, and
 `/ticket <message>`. A student can withdraw only their own leave dated today or
 later. Each withdrawal is recorded in the `Audit Log` worksheet.
+In a LINE chat, `/hello` and `/help` show a Flex welcome card with Quick Reply
+buttons for personal status, help, and contacting an administrator. Personal
+status is only returned in a private chat; using the status button in a group
+directs the student to private chat instead. Rich Menu integration and
+confirmation before withdrawing leave are not included yet.
 
 Administrators can use `/ping`, `/report [date]`, `/summary [date]`,
 `/status <student> [date]`, `/set <student> <status> [date]`,

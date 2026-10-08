@@ -39,7 +39,7 @@ class HandleCommandTests(unittest.TestCase):
                 self.assertIsNone(handle_command(text, self.tracker, "Ustudent"))
 
     def test_removed_public_commands_are_not_handled(self) -> None:
-        for text in ("/help", "/absent", "/attendance"):
+        for text in ("/absent", "/attendance"):
             with self.subTest(text=text):
                 response = handle_command(text, self.tracker, "Ustudent")
                 self.assertIn("removed", response)
@@ -47,6 +47,13 @@ class HandleCommandTests(unittest.TestCase):
             "admin",
             handle_command("/ping", self.tracker, "Ustudent").lower(),
         )
+
+    def test_public_help_lists_student_actions(self) -> None:
+        response = handle_command("/help", self.tracker, "Ustudent")
+
+        self.assertIn("/statusme [date]", response)
+        self.assertIn("/ticket <message>", response)
+        self.assertNotIn("/report", response)
 
     def test_admin_commands_require_permanent_user_id_allowlist(self) -> None:
         with mock.patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin,Uother"}):

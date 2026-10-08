@@ -383,10 +383,9 @@ def handle_message(event):
     if analysis.intent == "REVIEW":
         reply_to_line(
             event.reply_token,
-            "I noticed you mentioned "
-            f"{analysis.category}, but it's unclear whether you're notifying "
-            "us of an absence. Are you requesting leave? Please send a clear "
-            "leave notice with the date.",
+            "I couldn't determine whether you're notifying us of an absence. "
+            "Are you requesting leave? Please send a clear leave notice with "
+            "the date.",
         )
         return
 

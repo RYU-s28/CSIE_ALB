@@ -319,6 +319,9 @@ def handle_command(
     command_text = normalized_text.removeprefix(".").removeprefix("/")
     command_word, separator, raw_args = command_text.partition(" ")
     command_name = command_word.lower()
+    if command_name not in PUBLIC_COMMANDS | ADMIN_COMMANDS | {"help"}:
+        return None
+
     admins = _admin_ids()
     is_admin = is_admin_user(user_id)
     try:

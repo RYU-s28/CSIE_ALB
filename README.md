@@ -35,14 +35,14 @@ The attendance date parser recognizes today/tomorrow phrases and explicit dates
 such as `2026-10-07`. Leave categories are written with the configured Chinese
 labels, and recognized categories receive the `Confirmed` status.
 
-Set `GEMINI_API_KEY` to enable AI attendance intent detection. Every non-command
-LINE text message is sent to Gemini (`gemini-3.5-flash-lite`) using the Interactions
-API, with the raw message
-separated from the system instructions. The model returns a validated JSON
-intent: `IGNORE` chatter receives no reply and is not saved, `REVIEW` asks the
-sender to clarify, and only `LEAVE` proceeds through the existing identity,
-date, and Google Sheets flow. If Gemini is unavailable, the message is not
-saved and the sender is told to retry.
+Set `GEMINI_API_KEY` to enable staged AI attendance classification. Common
+greetings and reactions are ignored locally, and high-confidence Python
+classifications do not call Gemini. Uncertain attendance intent is checked by
+Gemini (`gemini-3.5-flash-lite`) using the Interactions API. Only a confirmed
+leave proceeds to category classification, where Python keywords are tried
+first and Gemini is called only if Python cannot determine the category.
+`IGNORE` messages are not saved, `REVIEW` asks the sender to clarify, and only
+`LEAVE` proceeds through the existing identity, date, and Google Sheets flow.
 
 ## LINE commands
 

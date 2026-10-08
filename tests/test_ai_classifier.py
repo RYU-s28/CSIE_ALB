@@ -5,18 +5,20 @@ import unittest
 from unittest import mock
 
 from attendance.ai_classifier import (
-    CATEGORY_TO_STATUS,
+    CATEGORY_RESPONSE_SCHEMA,
     GEMINI_MODEL,
-    RESPONSE_SCHEMA,
-    SYSTEM_PROMPT,
+    IGNORE_MESSAGES,
+    INTENT_RESPONSE_SCHEMA,
     classify_attendance_message,
-    parse_ai_response,
+    should_skip_ai,
 )
 
 
-def make_ai_modules(response_text: str):
+def make_ai_modules(*responses: str):
     client = mock.Mock()
-    client.interactions.create.return_value.output_text = response_text
+    client.interactions.create.side_effect = [
+        mock.Mock(output_text=response) for response in responses
+    ]
     genai_module = ModuleType("google.genai")
     genai_module.Client = mock.Mock(return_value=client)
     google_module = ModuleType("google")
@@ -24,97 +26,161 @@ def make_ai_modules(response_text: str):
     return google_module, genai_module, client
 
 
+def call_classifier(message: str, *responses: str):
+    google_module, genai_module, client = make_ai_modules(*responses)
+    with (
+        mock.patch.dict(
+            sys.modules,
+            {
+                "google": google_module,
+                "google.genai": genai_module,
+            },
+        ),
+        mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-api-key"}),
+    ):
+        analysis = classify_attendance_message(message)
+    return analysis, genai_module, client
+
+
 class AiAttendanceClassifierTests(unittest.TestCase):
-    def test_parses_each_intent_and_leave_category(self) -> None:
-        for category, expected_status in CATEGORY_TO_STATUS.items():
-            with self.subTest(category=category):
-                result = parse_ai_response(
-                    f'{{"intent":"LEAVE","category":"{category}",'
-                    '"reasoning":"Explicit leave notice."}'
-                )
+    def test_known_greetings_are_ignored_without_an_ai_request(self) -> None:
+        self.assertIn("hi", IGNORE_MESSAGES)
+        for message in ("Hi!", "  GOOD morning everyone. ", "早安", "哈哈"):
+            with self.subTest(message=message):
+                self.assertTrue(should_skip_ai(message))
+                result = classify_attendance_message(message)
+                self.assertEqual(result.intent, "IGNORE")
+
+    def test_messages_without_attendance_signals_are_ignored_locally(self) -> None:
+        for message in ("Dili pwede?", "It's a lovely day", "Thanks everyone"):
+            with self.subTest(message=message):
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    result = classify_attendance_message(message)
+                self.assertEqual(result.intent, "IGNORE")
+
+    def test_confident_python_leave_category_skips_gemini(self) -> None:
+        messages = (
+            ("明天病假", "sick_leave"),
+            (
+                "I can't work tomorrow because im not feeling well",
+                "sick_leave",
+            ),
+        )
+        for message, expected_status in messages:
+            with self.subTest(message=message):
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    result = classify_attendance_message(message)
                 self.assertEqual(result.intent, "LEAVE")
-                self.assertEqual(result.category, category)
                 self.assertEqual(
                     result.to_classification_result().status,
                     expected_status,
                 )
 
-        review = parse_ai_response(
-            '{"intent":"REVIEW","category":"病假",'
-            '"reasoning":"Illness mentioned, absence unclear."}'
-        )
-        self.assertEqual(review.intent, "REVIEW")
-        with self.assertRaises(ValueError):
-            review.to_classification_result()
-
-        ignored = parse_ai_response(
-            '{"intent":"IGNORE","category":null,'
-            '"reasoning":"Greeting only."}'
-        )
-        self.assertEqual(ignored.intent, "IGNORE")
-        self.assertIsNone(ignored.category)
-
-    def test_rejects_invalid_json_or_response_shapes(self) -> None:
-        responses = (
-            "not json",
-            '{"intent":"LEAVE","category":"待確認"}',
-            '{"intent":"MAYBE","category":null,"reasoning":"?"}',
-            '{"intent":"IGNORE","category":"病假","reasoning":"?"}',
-            '{"intent":"LEAVE","category":"無關","reasoning":"?"}',
-            '{"intent":"REVIEW","category":null,"reasoning":"?"}',
-            '{"intent":[],"category":null,"reasoning":"?"}',
-            '{"intent":"IGNORE","category":null,"reasoning":" "}',
-            '{"intent":"IGNORE","category":null,"reasoning":"?","extra":1}',
-        )
-        for response in responses:
-            with self.subTest(response=response):
-                with self.assertRaises(ValueError):
-                    parse_ai_response(response)
-
-    def test_sends_raw_message_to_gemini_with_system_instructions(self) -> None:
-        self.assertEqual(GEMINI_MODEL, "gemini-3.5-flash-lite")
-        user_message = "Good morning everyone!"
-        google_module, genai_module, client = make_ai_modules(
-            '{"intent":"IGNORE","category":null,"reasoning":"Greeting only."}'
+    def test_uncertain_intent_that_ai_ignores_uses_one_ai_call(self) -> None:
+        analysis, _, client = call_classifier(
+            "Who is taking leave tomorrow?",
+            '{"intent":"IGNORE","reasoning":"This asks about another person."}',
         )
 
-        with (
-            mock.patch.dict(
-                sys.modules,
-                {
-                    "google": google_module,
-                    "google.genai": genai_module,
-                },
-            ),
-            mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-api-key"}),
-        ):
-            result = classify_attendance_message(user_message)
-
-        self.assertEqual(result.intent, "IGNORE")
-        genai_module.Client.assert_called_once_with(api_key="test-api-key")
+        self.assertEqual(analysis.intent, "IGNORE")
+        client.interactions.create.assert_called_once()
         request = client.interactions.create.call_args.kwargs
+        self.assertEqual(request["input"], "Who is taking leave tomorrow?")
         self.assertEqual(request["model"], GEMINI_MODEL)
-        self.assertEqual(
-            request["input"],
-            user_message,
-        )
-        self.assertEqual(
-            request["system_instruction"],
-            SYSTEM_PROMPT,
-        )
-        self.assertEqual(
-            request["response_format"],
-            {
-                "type": "text",
-                "mime_type": "application/json",
-                "schema": RESPONSE_SCHEMA,
-            },
+        self.assertEqual(request["response_format"]["schema"], INTENT_RESPONSE_SCHEMA)
+
+    def test_python_detects_leave_intent_and_ai_classifies_unknown_reason(self) -> None:
+        analysis, _, client = call_classifier(
+            "I won't work tomorrow due to a situation I haven't explained",
+            '{"category":"待確認","reasoning":"Absence stated without a reason."}',
         )
 
-    def test_missing_api_key_reports_configuration_error(self) -> None:
+        self.assertEqual(analysis.intent, "LEAVE")
+        self.assertEqual(
+            analysis.to_classification_result().status,
+            "unknown",
+        )
+        client.interactions.create.assert_called_once()
+        request = client.interactions.create.call_args.kwargs
+        self.assertEqual(
+            request["response_format"]["schema"],
+            CATEGORY_RESPONSE_SCHEMA,
+        )
+
+    def test_uncertain_intent_then_leave_category_uses_two_staged_ai_calls(self) -> None:
+        analysis, _, client = call_classifier(
+            "I will be absent tomorrow for an unusual personal reason",
+            '{"intent":"LEAVE","reasoning":"The sender says they will be away."}',
+            '{"category":"事假","reasoning":"The message states a personal reason."}',
+        )
+
+        self.assertEqual(analysis.intent, "LEAVE")
+        self.assertEqual(
+            analysis.to_classification_result().status,
+            "personal_leave",
+        )
+        self.assertEqual(client.interactions.create.call_count, 2)
+        intent_request, category_request = [
+            call.kwargs
+            for call in client.interactions.create.call_args_list
+        ]
+        self.assertEqual(
+            intent_request["response_format"]["schema"],
+            INTENT_RESPONSE_SCHEMA,
+        )
+        self.assertEqual(
+            category_request["response_format"]["schema"],
+            CATEGORY_RESPONSE_SCHEMA,
+        )
+
+    def test_ai_review_does_not_request_a_category_or_save(self) -> None:
+        analysis, _, client = call_classifier(
+            "I have a fever",
+            '{"intent":"REVIEW","reasoning":"Illness is mentioned without absence."}',
+        )
+
+        self.assertEqual(analysis.intent, "REVIEW")
+        self.assertEqual(client.interactions.create.call_count, 1)
+        with self.assertRaises(ValueError):
+            analysis.to_classification_result()
+
+    def test_rejects_malformed_intent_and_category_responses(self) -> None:
+        cases = (
+            (
+                "I am not feeling well",
+                ('{"intent":"UNKNOWN","reasoning":"?"}',),
+            ),
+            (
+                "I won't work tomorrow for some reason",
+                ('{"category":"unknown","reasoning":"?"}',),
+            ),
+        )
+        for message, responses in cases:
+            with self.subTest(message=message):
+                google_module, genai_module, client = make_ai_modules(*responses)
+                with (
+                    mock.patch.dict(
+                        sys.modules,
+                        {
+                            "google": google_module,
+                            "google.genai": genai_module,
+                        },
+                    ),
+                    mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-api-key"}),
+                ):
+                    with self.assertRaises(ValueError):
+                        classify_attendance_message(message)
+                self.assertGreaterEqual(
+                    client.interactions.create.call_count,
+                    1,
+                )
+
+    def test_missing_api_key_reports_configuration_error_for_uncertain_message(
+        self,
+    ) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "GEMINI_API_KEY"):
-                classify_attendance_message("Good morning")
+                classify_attendance_message("Who is taking leave tomorrow?")
 
 
 if __name__ == "__main__":

@@ -23,6 +23,15 @@ class HandleCommandTests(unittest.TestCase):
         self.assertEqual(normalize_command(".statusme tomorrow"), "statusme")
         self.assertEqual(normalize_command("/hello"), "hello")
 
+    def test_ordinary_messages_with_apostrophes_are_not_parsed_as_commands(self) -> None:
+        for text in (
+            "I can't work tomorrow because im not feeling well",
+            "I'm having period cramps. I won't work this afternoon.",
+            "That's not a command",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(handle_command(text, self.tracker, "Ustudent"))
+
     def test_removed_public_commands_are_not_handled(self) -> None:
         for text in (".help", ".absent", ".attendance"):
             with self.subTest(text=text):

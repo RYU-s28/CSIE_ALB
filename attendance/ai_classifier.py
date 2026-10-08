@@ -20,7 +20,23 @@ CATEGORY_TO_STATUS = {
     "半天": "half_day",
     "待確認": "unknown",
 }
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "intent": {
+            "type": "string",
+            "enum": ["LEAVE", "IGNORE", "REVIEW"],
+        },
+        "category": {
+            "type": ["string", "null"],
+            "enum": [*CATEGORY_TO_STATUS, None],
+        },
+        "reasoning": {"type": "string"},
+    },
+    "required": ["intent", "category", "reasoning"],
+}
 
 SYSTEM_PROMPT = """# ROLE
 You are an intelligent HR Attendance Assistant for a LINE group.
@@ -121,20 +137,21 @@ def classify_attendance_message(message: str) -> AttendanceAnalysis:
         )
 
     from google import genai
-    from google.genai import types
 
     client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
+    response = client.interactions.create(
         model=GEMINI_MODEL,
-        contents=message,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            response_mime_type="application/json",
-        ),
+        input=message,
+        system_instruction=SYSTEM_PROMPT,
+        response_format={
+            "type": "text",
+            "mime_type": "application/json",
+            "schema": RESPONSE_SCHEMA,
+        },
     )
-    if not response.text:
+    if not response.output_text:
         raise ValueError("Gemini returned an empty attendance classification.")
-    return parse_ai_response(response.text)
+    return parse_ai_response(response.output_text)
 
 
 def parse_ai_response(response_text: str) -> AttendanceAnalysis:

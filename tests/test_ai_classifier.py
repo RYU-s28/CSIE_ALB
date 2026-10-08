@@ -7,6 +7,7 @@ from unittest import mock
 from attendance.ai_classifier import (
     CATEGORY_TO_STATUS,
     GEMINI_MODEL,
+    RESPONSE_SCHEMA,
     SYSTEM_PROMPT,
     classify_attendance_message,
     parse_ai_response,
@@ -15,15 +16,12 @@ from attendance.ai_classifier import (
 
 def make_ai_modules(response_text: str):
     client = mock.Mock()
-    client.models.generate_content.return_value.text = response_text
+    client.interactions.create.return_value.output_text = response_text
     genai_module = ModuleType("google.genai")
     genai_module.Client = mock.Mock(return_value=client)
-    types_module = ModuleType("google.genai.types")
-    types_module.GenerateContentConfig = mock.Mock(return_value="json-config")
     google_module = ModuleType("google")
     google_module.genai = genai_module
-    genai_module.types = types_module
-    return google_module, genai_module, types_module, client
+    return google_module, genai_module, client
 
 
 class AiAttendanceClassifierTests(unittest.TestCase):
@@ -74,8 +72,9 @@ class AiAttendanceClassifierTests(unittest.TestCase):
                     parse_ai_response(response)
 
     def test_sends_raw_message_to_gemini_with_system_instructions(self) -> None:
+        self.assertEqual(GEMINI_MODEL, "gemini-3.5-flash-lite")
         user_message = "Good morning everyone!"
-        google_module, genai_module, types_module, client = make_ai_modules(
+        google_module, genai_module, client = make_ai_modules(
             '{"intent":"IGNORE","category":null,"reasoning":"Greeting only."}'
         )
 
@@ -85,7 +84,6 @@ class AiAttendanceClassifierTests(unittest.TestCase):
                 {
                     "google": google_module,
                     "google.genai": genai_module,
-                    "google.genai.types": types_module,
                 },
             ),
             mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-api-key"}),
@@ -94,16 +92,23 @@ class AiAttendanceClassifierTests(unittest.TestCase):
 
         self.assertEqual(result.intent, "IGNORE")
         genai_module.Client.assert_called_once_with(api_key="test-api-key")
-        request = client.models.generate_content.call_args.kwargs
+        request = client.interactions.create.call_args.kwargs
         self.assertEqual(request["model"], GEMINI_MODEL)
-        self.assertEqual(request["contents"], user_message)
         self.assertEqual(
-            request["config"],
-            "json-config",
+            request["input"],
+            user_message,
         )
-        types_module.GenerateContentConfig.assert_called_once_with(
-            system_instruction=SYSTEM_PROMPT,
-            response_mime_type="application/json",
+        self.assertEqual(
+            request["system_instruction"],
+            SYSTEM_PROMPT,
+        )
+        self.assertEqual(
+            request["response_format"],
+            {
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": RESPONSE_SCHEMA,
+            },
         )
 
     def test_missing_api_key_reports_configuration_error(self) -> None:

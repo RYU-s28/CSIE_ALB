@@ -37,7 +37,6 @@ from attendance.leave_message import (
 from bot.commands import handle_command, is_admin_user, normalize_command
 from bot.line_ui import welcome_message
 from ui.leave_confirmation import (
-    attendance_status_message,
     leave_confirmation_message,
     withdrawal_confirmation_message,
 )
@@ -540,17 +539,22 @@ def handle_message(event):
             "待確認",
         }
         if category in leave_categories:
-            reply_to_line(
-                event.reply_token,
-                leave_confirmation_message(
-                    student_name=student_name,
-                    leave_date=record.attendance_date.strftime("%Y/%m/%d"),
-                    category=category,
-                    record_id=attendance_record_id,
-                    confirmed=classification.status != "unknown",
-                    withdrawable=category != "待確認",
-                ),
+            confirmation_card = leave_confirmation_message(
+                student_name=student_name,
+                leave_date=record.attendance_date.strftime("%Y/%m/%d"),
+                category=category,
+                record_id=attendance_record_id,
+                confirmed=classification.status != "unknown",
+                withdrawable=category != "待確認",
             )
+            in_group = bool(
+                getattr(event.source, "group_id", None)
+                or getattr(event.source, "room_id", None)
+            )
+            if in_group:
+                push_to_line(user_id, confirmation_card)
+            else:
+                reply_to_line(event.reply_token, confirmation_card)
 
         print("CLASSIFICATION:", record.status)
         print("CONFIDENCE:", record.confidence)
@@ -634,7 +638,7 @@ def handle_postback(event):
         reply_to_line(event.reply_token, "Your leave was not withdrawn.")
         return
 
-    if action not in {"status", "correction", "withdraw", "confirm_withdraw"}:
+    if action not in {"correction", "withdraw", "confirm_withdraw"}:
         print("Unknown LINE postback action:", action)
         return
 
@@ -669,28 +673,6 @@ def handle_postback(event):
 
     attendance_date = date.fromisoformat(attendance["date"])
     category = attendance.get("type", "待確認")
-    if action == "status":
-        status_card = attendance_status_message(
-            category=category,
-            leave_date=attendance_date.strftime("%Y/%m/%d"),
-            record_id=record_id,
-        )
-        if group_id or room_id:
-            if push_to_line(user_id, status_card):
-                reply_to_line(
-                    event.reply_token,
-                    "I sent your status in a private message.",
-                )
-            else:
-                reply_to_line(
-                    event.reply_token,
-                    "For privacy, I couldn't send your status here. Please "
-                    "open a private chat with CSIE Attendance.",
-                )
-        else:
-            reply_to_line(event.reply_token, status_card)
-        return
-
     if action == "correction":
         try:
             ticket_id = create_ticket(

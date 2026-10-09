@@ -271,13 +271,9 @@ def _button(
 def _footer(record_id: str, *, withdrawable: bool) -> dict[str, object]:
     buttons = [
         _button(
-            "View My Status",
-            f"action=status&record_id={record_id}",
-            style="primary",
-        ),
-        _button(
             "Request Correction",
             f"action=correction&record_id={record_id}",
+            style="primary",
         ),
     ]
     if withdrawable:

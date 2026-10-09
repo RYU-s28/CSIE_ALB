@@ -1097,3 +1097,153 @@ def append_attendance_row(values: list[object]) -> str | None:
         value_input_option="RAW",
     )
     return record_id
+
+
+# --------------------------------------------------
+# Monthly Report sheet
+# --------------------------------------------------
+
+MONTHLY_REPORT_SHEET_NAME = "Monthly Report"
+
+
+def _get_monthly_report_sheet():
+    """Return the Monthly Report worksheet, or None if unavailable."""
+    if ensure_sheet_state() is None:
+        return None
+    try:
+        return spreadsheet.worksheet(MONTHLY_REPORT_SHEET_NAME)
+    except WorksheetNotFound:
+        return None
+
+
+def _find_month_block(
+    rows: list[list[str]],
+    target_date: date,
+) -> tuple[int, int] | None:
+    """Locate the header row and starting column for the given month/year.
+
+    The Monthly Report sheet stacks month blocks vertically.  Each block has
+    a merged header cell whose text contains the month name and year (e.g.
+    "October 2026").  The day numbers (1–31) appear on the next non-empty row.
+
+    Returns (day_header_row_idx, student_id_col_idx) using 0-based indices,
+    or None if the month block is not found.
+    """
+    month_name = target_date.strftime("%B %Y")  # e.g. "October 2026"
+    for row_idx, row in enumerate(rows):
+        for cell in row:
+            if month_name.lower() in str(cell).strip().lower():
+                # Scan forward for the row that contains day numbers 1–31.
+                for day_row_idx in range(row_idx + 1, min(row_idx + 6, len(rows))):
+                    day_row = rows[day_row_idx]
+                    day_numbers = [
+                        str(cell).strip()
+                        for cell in day_row
+                        if str(cell).strip().lstrip("0").isdigit()
+                    ]
+                    if len(day_numbers) >= 10:  # must have most of the days
+                        # Find which column index is the student ID column
+                        # (first column before the day numbers that is non-numeric).
+                        student_id_col = 0
+                        for col_idx, cell in enumerate(day_row):
+                            if str(cell).strip().lstrip("0").isdigit():
+                                student_id_col = max(0, col_idx - 2)
+                                break
+                        return day_row_idx, student_id_col
+    return None
+
+
+def update_monthly_report_cell(
+    student_id: str,
+    target_date: date,
+    value: str,
+) -> bool:
+    """Write a leave type or '出席' into the Monthly Report grid cell.
+
+    Finds the month block for *target_date*, then the student row by matching
+    the student ID in the first usable column of that block, then writes
+    *value* into the column corresponding to target_date.day.
+
+    Returns True on success, False if the sheet or cell could not be found.
+    """
+    sheet = _get_monthly_report_sheet()
+    if sheet is None:
+        print("MONTHLY REPORT: worksheet not found.")
+        return False
+
+    try:
+        rows = sheet.get_all_values(pad_values=True)
+        result = _find_month_block(rows, target_date)
+        if result is None:
+            print(f"MONTHLY REPORT: month block for {target_date:%B %Y} not found.")
+            return False
+
+        day_row_idx, student_id_col = result
+        day_row = rows[day_row_idx]
+
+        # Build a mapping from day number → column index (0-based).
+        day_to_col: dict[int, int] = {}
+        for col_idx, cell in enumerate(day_row):
+            stripped = str(cell).strip().lstrip("0")
+            if stripped.isdigit():
+                day_num = int(stripped) if stripped else int(str(cell).strip())
+                if 1 <= day_num <= 31:
+                    day_to_col[day_num] = col_idx
+
+        target_col_idx = day_to_col.get(target_date.day)
+        if target_col_idx is None:
+            print(f"MONTHLY REPORT: day column for day {target_date.day} not found.")
+            return False
+
+        # Find the student row — scan rows below the day header.
+        student_row_idx = None
+        for row_idx in range(day_row_idx + 1, len(rows)):
+            cell_val = str(rows[row_idx][student_id_col]).strip()
+            if cell_val == str(student_id).strip():
+                student_row_idx = row_idx
+                break
+            # Stop scanning when we hit the next month block header.
+            combined = " ".join(str(c).strip() for c in rows[row_idx])
+            if re.search(r"\b(January|February|March|April|May|June|July|"
+                         r"August|September|October|November|December)\s+\d{4}\b",
+                         combined, re.IGNORECASE):
+                break
+
+        if student_row_idx is None:
+            print(f"MONTHLY REPORT: student {student_id} not found in month block.")
+            return False
+
+        # Sheets API uses 1-based row/col numbers.
+        sheet_row = student_row_idx + 1
+        sheet_col = target_col_idx + 1
+        sheet.update_cell(sheet_row, sheet_col, value)
+        print(
+            f"MONTHLY REPORT: wrote {value!r} for student {student_id} "
+            f"on {target_date} (row={sheet_row}, col={sheet_col})."
+        )
+        return True
+
+    except Exception as error:
+        print("MONTHLY REPORT UPDATE ERROR:", repr(error))
+        return False
+
+
+def mark_present_in_monthly_report(target_date: date) -> None:
+    """Write '出席' for every active student who has no leave on *target_date*.
+
+    Reads today's attendance rows from the Attendance sheet and skips any
+    student that already has a record.  All remaining active students are
+    marked as 出席 in the Monthly Report grid.
+    """
+    try:
+        students, _ = get_report_students()
+        leave_student_ids = {
+            row["student_id"]
+            for row in get_attendance_rows(target_date)
+        }
+        for student_id in students:
+            if student_id in leave_student_ids:
+                continue  # already has a leave record — do not overwrite
+            update_monthly_report_cell(student_id, target_date, "出席")
+    except Exception as error:
+        print("MARK PRESENT ERROR:", repr(error))

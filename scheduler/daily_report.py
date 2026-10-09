@@ -18,7 +18,11 @@ from linebot.v3.messaging import (
 from attendance.attendance import AttendanceRecord
 from attendance.leave_message import LEAVE_TYPE_LABELS
 from attendance.report import build_report
-from database.google_sheets import get_attendance_rows, get_report_students
+from database.google_sheets import (
+    get_attendance_rows,
+    get_report_students,
+    mark_present_in_monthly_report,
+)
 from scheduler.work_calendar import is_workday
 
 
@@ -90,6 +94,16 @@ def daily_attendance_job() -> None:
         print("DAILY ATTENDANCE REPORT ERROR:", repr(error))
 
 
+def mark_present_job() -> None:
+    """Mark every student with no leave today as 出席 in the Monthly Report."""
+    today = datetime.now(TAIPEI).date()
+    if not is_workday(today):
+        print(f"{today}: Not a workday. Skipping mark-present job.")
+        return
+    print(f"{today}: Running mark-present job for Monthly Report.")
+    mark_present_in_monthly_report(today)
+
+
 def start_scheduler() -> None:
     if scheduler.running:
         return
@@ -99,6 +113,14 @@ def start_scheduler() -> None:
         hour=7,
         minute=0,
         id="daily_attendance_report",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        mark_present_job,
+        trigger="cron",
+        hour=7,
+        minute=0,
+        id="mark_present_monthly_report",
         replace_existing=True,
     )
     scheduler.start()

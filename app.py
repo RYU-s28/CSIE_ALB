@@ -49,6 +49,7 @@ from database.google_sheets import (
     get_attendance_record_by_id,
     LineRegistrationConflictError,
     register_line_user,
+    update_monthly_report_cell,
 )
 
 
@@ -555,6 +556,13 @@ def handle_message(event):
                 push_to_line(user_id, confirmation_card)
             else:
                 reply_to_line(event.reply_token, confirmation_card)
+
+            # Mirror the leave type into the Monthly Report grid.
+            update_monthly_report_cell(
+                student_work_id,
+                record.attendance_date,
+                category,
+            )
 
         print("CLASSIFICATION:", record.status)
         print("CONFIDENCE:", record.confidence)

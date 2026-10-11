@@ -1116,40 +1116,38 @@ def _get_monthly_report_sheet():
         return None
 
 
-def _find_month_block(
-    rows: list[list[str]],
-    target_date: date,
-) -> tuple[int, int] | None:
-    """Locate the header row and starting column for the given month/year.
+def _cell_as_day(cell_str: str, target_date: date) -> int | None:
+    """Return the day number (1-31) if cell_str refers to a day in the
+    target month, handling multiple formats gspread may return:
 
-    The Monthly Report sheet stacks month blocks vertically.  Each block has
-    a merged header cell whose text contains the month name and year (e.g.
-    "October 2026").  The day numbers (1–31) appear on the next non-empty row.
-
-    Returns (day_header_row_idx, student_id_col_idx) using 0-based indices,
-    or None if the month block is not found.
+    - Plain integer:           9
+    - Day + name (one cell):   9 Fri  (or with a newline between them)
+    - Full date MM/DD/YYYY:    10/9/2026
+    - Full date YYYY-MM-DD:    2026-10-09
     """
-    month_name = target_date.strftime("%B %Y")  # e.g. "October 2026"
-    for row_idx, row in enumerate(rows):
-        for cell in row:
-            if month_name.lower() in str(cell).strip().lower():
-                # Scan forward for the row that contains day numbers 1–31.
-                for day_row_idx in range(row_idx + 1, min(row_idx + 6, len(rows))):
-                    day_row = rows[day_row_idx]
-                    day_numbers = [
-                        str(cell).strip()
-                        for cell in day_row
-                        if str(cell).strip().lstrip("0").isdigit()
-                    ]
-                    if len(day_numbers) >= 10:  # must have most of the days
-                        # Find which column index is the student ID column
-                        # (first column before the day numbers that is non-numeric).
-                        student_id_col = 0
-                        for col_idx, cell in enumerate(day_row):
-                            if str(cell).strip().lstrip("0").isdigit():
-                                student_id_col = max(0, col_idx - 2)
-                                break
-                        return day_row_idx, student_id_col
+    s = str(cell_str).strip()
+    if not s:
+        return None
+
+    # Full date formats — try these first before any integer parsing.
+    first_line = s.split("\n")[0].strip()
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            dt = datetime.strptime(first_line, fmt).date()
+            if dt.year == target_date.year and dt.month == target_date.month:
+                return dt.day
+        except ValueError:
+            continue
+
+    # Plain integer or "9 Fri" / "9\nFri" — take the leading numeric token.
+    first_token = re.split(r"[\s\n]", first_line)[0].strip()
+    try:
+        d = int(first_token)
+        if 1 <= d <= 31:
+            return d
+    except ValueError:
+        pass
+
     return None
 
 
@@ -1158,13 +1156,11 @@ def update_monthly_report_cell(
     target_date: date,
     value: str,
 ) -> bool:
-    """Write a leave type or '出席' into the Monthly Report grid cell.
+    """Write *value* (leave type or '出席') into the Monthly Report grid.
 
-    Finds the month block for *target_date*, then the student row by matching
-    the student ID in the first usable column of that block, then writes
-    *value* into the column corresponding to target_date.day.
-
-    Returns True on success, False if the sheet or cell could not be found.
+    Locates the month header with ``sheet.find()``, scans forward for the
+    day-number row, then finds the student row by matching *student_id* in
+    the first non-day column.  Returns True on success.
     """
     sheet = _get_monthly_report_sheet()
     if sheet is None:
@@ -1172,54 +1168,92 @@ def update_monthly_report_cell(
         return False
 
     try:
-        rows = sheet.get_all_values(pad_values=True)
-        result = _find_month_block(rows, target_date)
-        if result is None:
-            print(f"MONTHLY REPORT: month block for {target_date:%B %Y} not found.")
+        month_text = target_date.strftime("%B %Y")  # e.g. "October 2026"
+
+        # --- Locate the month header cell ---
+        try:
+            header_cell = sheet.find(month_text, in_row=None)
+        except Exception:
+            print(f"MONTHLY REPORT: '{month_text}' header cell not found.")
             return False
 
-        day_row_idx, student_id_col = result
-        day_row = rows[day_row_idx]
+        header_row_1based = header_cell.row  # 1-based
 
-        # Build a mapping from day number → column index (0-based).
-        day_to_col: dict[int, int] = {}
-        for col_idx, cell in enumerate(day_row):
-            stripped = str(cell).strip().lstrip("0")
-            if stripped.isdigit():
-                day_num = int(stripped) if stripped else int(str(cell).strip())
-                if 1 <= day_num <= 31:
-                    day_to_col[day_num] = col_idx
+        # Fetch all rows from the sheet once.
+        rows = sheet.get_all_values(pad_values=True)
+
+        # --- Find the day-number row below the month header ---
+        day_to_col: dict[int, int] = {}   # day_number → 0-based column index
+        day_row_1based: int | None = None
+
+        for r_idx in range(header_row_1based, min(header_row_1based + 8, len(rows))):
+            row = rows[r_idx]
+            candidate: dict[int, int] = {}
+            for c_idx, cell in enumerate(row):
+                d = _cell_as_day(cell, target_date)
+                if d is not None:
+                    candidate[d] = c_idx
+            # Accept this row if it has at least 5 day-columns.
+            if len(candidate) >= 5:
+                day_to_col = candidate
+                day_row_1based = r_idx + 1  # convert to 1-based
+                break
+
+        if not day_to_col:
+            print(
+                f"MONTHLY REPORT: day header row not found below '{month_text}' "
+                f"(searched rows {header_row_1based}–{header_row_1based + 7})."
+            )
+            return False
 
         target_col_idx = day_to_col.get(target_date.day)
         if target_col_idx is None:
-            print(f"MONTHLY REPORT: day column for day {target_date.day} not found.")
+            print(
+                f"MONTHLY REPORT: column for day {target_date.day} not found. "
+                f"Available days: {sorted(day_to_col)}"
+            )
             return False
 
-        # Find the student row — scan rows below the day header.
-        student_row_idx = None
-        for row_idx in range(day_row_idx + 1, len(rows)):
-            cell_val = str(rows[row_idx][student_id_col]).strip()
-            if cell_val == str(student_id).strip():
-                student_row_idx = row_idx
+        # Determine which column holds student IDs (first column left of day cols).
+        first_day_col_idx = min(day_to_col.values())
+        student_id_col = max(0, first_day_col_idx - 2)
+
+        # --- Find the student row ---
+        student_row_1based: int | None = None
+        next_month_pattern = re.compile(
+            r"\b(January|February|March|April|May|June|July|"
+            r"August|September|October|November|December)\s+\d{4}\b",
+            re.IGNORECASE,
+        )
+        for r_idx in range(day_row_1based, len(rows)):
+            row = rows[r_idx]
+            # Check both the expected student_id column and its neighbour.
+            for col_check in range(
+                max(0, student_id_col - 1),
+                min(student_id_col + 3, len(row)),
+            ):
+                if str(row[col_check]).strip() == str(student_id).strip():
+                    student_row_1based = r_idx + 1
+                    break
+            if student_row_1based is not None:
                 break
-            # Stop scanning when we hit the next month block header.
-            combined = " ".join(str(c).strip() for c in rows[row_idx])
-            if re.search(r"\b(January|February|March|April|May|June|July|"
-                         r"August|September|October|November|December)\s+\d{4}\b",
-                         combined, re.IGNORECASE):
+            # Stop at the next month block.
+            if next_month_pattern.search(" ".join(str(c) for c in row)):
                 break
 
-        if student_row_idx is None:
-            print(f"MONTHLY REPORT: student {student_id} not found in month block.")
+        if student_row_1based is None:
+            print(
+                f"MONTHLY REPORT: student '{student_id}' not found in "
+                f"'{month_text}' block (student_id_col={student_id_col})."
+            )
             return False
 
-        # Sheets API uses 1-based row/col numbers.
-        sheet_row = student_row_idx + 1
-        sheet_col = target_col_idx + 1
-        sheet.update_cell(sheet_row, sheet_col, value)
+        # --- Write the value ---
+        sheet_col = target_col_idx + 1  # 1-based
+        sheet.update_cell(student_row_1based, sheet_col, value)
         print(
             f"MONTHLY REPORT: wrote {value!r} for student {student_id} "
-            f"on {target_date} (row={sheet_row}, col={sheet_col})."
+            f"on {target_date} (row={student_row_1based}, col={sheet_col})."
         )
         return True
 
@@ -1231,9 +1265,9 @@ def update_monthly_report_cell(
 def mark_present_in_monthly_report(target_date: date) -> None:
     """Write '出席' for every active student who has no leave on *target_date*.
 
-    Reads today's attendance rows from the Attendance sheet and skips any
-    student that already has a record.  All remaining active students are
-    marked as 出席 in the Monthly Report grid.
+    Reads today's Attendance sheet rows and skips any student that already has
+    a record.  All remaining active students are marked 出席 in the Monthly
+    Report grid.
     """
     try:
         students, _ = get_report_students()

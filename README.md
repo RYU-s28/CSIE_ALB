@@ -17,7 +17,8 @@ to the `Logs` table at `B4:H` so existing log data remains connected. The
 and backfilled from existing message text when possible. It marks unclear
 absence messages separately from their `待確認` type. These pending absences
 are excluded from the report's present count. The `Monthly Report` worksheet
-is not modified by the bot.
+is updated by scheduled attendance jobs, which write `出席` for students
+without a leave record on accepted workdays.
 
 The bot reads the existing `Students` worksheet and registers first-contact
 LINE accounts in place. Keep its columns named `Student ID`, `Chinese Name`,
@@ -57,14 +58,20 @@ accepted by the work calendar; if no destination is configured, it logs that
 the report was skipped.
 
 All bot commands start with `/` to distinguish them from ordinary chat.
-Students can use `/hello`, `/statusme [date]`, `/clear [date]`, and
-`/ticket <message>`. A student can withdraw only their own leave dated today or
-later. Each withdrawal is recorded in the `Audit Log` worksheet.
+Students can use `/hello`, `/statusme [date]`, `/clear [date]`,
+`/salary [YYYY-MM]`, and `/ticket <message>`. Salary inquiries read the
+student's `出席` and `半天` entries from the selected `Monthly Report` month
+(current month by default), estimate pay at NT$196 per hour (8 hours per full
+day, 4 per half day), and show the configured deductions and take-home estimate.
+Salary details are returned only in a private chat; selecting Salary from a
+group card sends the estimate privately when LINE allows it. A student can
+withdraw only their own leave dated today or later. Each withdrawal is recorded
+in the `Audit Log` worksheet.
 In a LINE chat, `/hello` and `/help` show a Flex welcome card with Quick Reply
-buttons for personal status, help, and contacting an administrator. Personal
-status is only returned in a private chat; using the status button in a group
-sends the result by private message when LINE allows it. A persistent Rich Menu
-is not set up yet.
+buttons for personal status, salary inquiry, help, and contacting an
+administrator. Personal status is only returned in a private chat; using the
+status button in a group sends the result by private message when LINE allows
+it. A persistent Rich Menu is not set up yet.
 
 After a leave record is successfully written, the bot sends a Flex confirmation
 card with the saved category, date, and stable attendance record ID. Existing

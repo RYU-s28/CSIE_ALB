@@ -1113,6 +1113,11 @@ def _get_monthly_report_sheet():
     try:
         return spreadsheet.worksheet(MONTHLY_REPORT_SHEET_NAME)
     except WorksheetNotFound:
+        available = [ws.title for ws in spreadsheet.worksheets()]
+        print(
+            f"MONTHLY REPORT: tab '{MONTHLY_REPORT_SHEET_NAME}' not found. "
+            f"Available tabs: {available}"
+        )
         return None
 
 
@@ -1297,6 +1302,88 @@ def update_monthly_report_cell(
     except Exception as error:
         print("MONTHLY REPORT UPDATE ERROR:", repr(error))
         return False
+
+
+def get_monthly_attendance_counts(
+    student_id: str,
+    target_month: date,
+) -> tuple[int, int]:
+    """Count full and half attendance days in one student's monthly report row."""
+
+    sheet = _get_monthly_report_sheet()
+    if sheet is None:
+        raise RuntimeError("The Monthly Report worksheet is unavailable.")
+
+    rows = sheet.get_all_values(pad_values=True)
+    month_text = target_month.strftime("%B %Y").casefold()
+    month_header_row = next(
+        (
+            row_index
+            for row_index, row in enumerate(rows)
+            if any(month_text in str(cell).strip().casefold() for cell in row)
+        ),
+        None,
+    )
+    if month_header_row is None:
+        raise ValueError(
+            f"The Monthly Report has no {target_month:%B %Y} section."
+        )
+
+    day_to_col: dict[int, int] = {}
+    day_row = None
+    for row_index in range(month_header_row + 1, min(month_header_row + 9, len(rows))):
+        candidate = {
+            day: column
+            for column, cell in enumerate(rows[row_index])
+            if (day := _cell_as_day(cell, target_month)) is not None
+        }
+        if len(candidate) >= 5:
+            day_to_col = candidate
+            day_row = row_index
+            break
+    if not day_to_col or day_row is None:
+        raise ValueError(
+            f"The day columns for {target_month:%B %Y} could not be found."
+        )
+
+    student_id_col = max(0, min(day_to_col.values()) - 2)
+    next_month_re = re.compile(
+        r"\b(January|February|March|April|May|June|July|August|September|"
+        r"October|November|December)\s+\d{4}\b",
+        re.IGNORECASE,
+    )
+    student_row = None
+    for row_index in range(day_row + 1, len(rows)):
+        row = rows[row_index]
+        if any(
+            str(row[column]).strip() == str(student_id).strip()
+            for column in range(
+                max(0, student_id_col - 1),
+                min(student_id_col + 3, len(row)),
+            )
+        ):
+            student_row = row
+            break
+        if next_month_re.search(" ".join(str(cell) for cell in row)):
+            break
+    if student_row is None:
+        raise ValueError(
+            f"Student {student_id!r} was not found in the "
+            f"{target_month:%B %Y} report."
+        )
+
+    full_days = 0
+    half_days = 0
+    for column in day_to_col.values():
+        if column >= len(student_row):
+            continue
+        value = str(student_row[column]).strip().casefold()
+        if value in {"出席", "present"}:
+            full_days += 1
+        elif value in {"半天", "half day", "half_day"}:
+            half_days += 1
+
+    return full_days, half_days
 
 
 def mark_present_in_monthly_report(target_date: date) -> None:

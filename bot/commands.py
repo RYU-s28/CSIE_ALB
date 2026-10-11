@@ -10,14 +10,18 @@ from json import loads
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from linebot.v3.messaging import FlexMessage
+
 from attendance.attendance import AttendanceRecord, AttendanceTracker
 from attendance.leave_message import LEAVE_TYPE_LABELS
 from attendance.report import StudentDisplay, build_report
+from attendance.salary import calculate_salary
 from database import google_sheets
 from scheduler.work_calendar import is_workday
+from bot.line_ui import salary_inquiry_message
 
 
-PUBLIC_COMMANDS = {"hello", "statusme", "clear", "ticket"}
+PUBLIC_COMMANDS = {"hello", "statusme", "clear", "ticket", "salary"}
 ADMIN_COMMANDS = {
     "ping", "report", "summary", "status", "set", "rm", "range",
     "undo", "tickets", "adminhelp",
@@ -315,7 +319,8 @@ def handle_command(
     student_id: str | None = None,
     report_students: dict[str, StudentDisplay] | None = None,
     expected_students: int | None = None,
-) -> str | None:
+    is_private: bool = False,
+) -> str | FlexMessage | None:
     del tracker, report_students, expected_students
     normalized_text = (text or "").strip()
     if not normalized_text.startswith("/"):
@@ -404,8 +409,40 @@ def handle_command(
             "Student help:\n"
             "• Leave notifications are recognized automatically.\n"
             "• Check status with /statusme [date].\n"
+            "• Check your estimated salary with /salary [YYYY-MM].\n"
             "• Contact an administrator with /ticket <message>.\n"
             "• Use /clear [date] to withdraw today's or a future leave."
+        )
+    if command == "salary":
+        if not is_private:
+            return "For privacy, salary inquiries are only available in a private chat with CSIE Attendance."
+        if len(args) > 1:
+            return "Usage: /salary [YYYY-MM]"
+        if not student_id:
+            return "Your LINE account is not linked to a student record. Please contact an administrator."
+        try:
+            target_month = (
+                date.fromisoformat(f"{args[0]}-01")
+                if args
+                else _today().replace(day=1)
+            )
+        except ValueError:
+            return "Invalid month. Use YYYY-MM, for example /salary 2026-10."
+        try:
+            full_days, half_days = google_sheets.get_monthly_attendance_counts(
+                student_id,
+                target_month,
+            )
+            estimate = calculate_salary(full_days, half_days)
+        except (RuntimeError, ValueError) as error:
+            print("STUDENT SALARY ERROR:", repr(error))
+            return (
+                "I couldn't retrieve your monthly attendance for that salary "
+                "estimate. Please check the month or contact an administrator."
+            )
+        return salary_inquiry_message(
+            estimate,
+            month_label=target_month.strftime("%B %Y"),
         )
     if command == "statusme":
         if len(args) > 1:

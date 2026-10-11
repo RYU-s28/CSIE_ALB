@@ -375,7 +375,12 @@ def handle_message(event):
     print("MESSAGE:", text)
 
     command_student_id = None
-    if user_id and normalize_command(text) in {"statusme", "clear", "ticket"}:
+    if user_id and normalize_command(text) in {
+        "statusme",
+        "clear",
+        "ticket",
+        "salary",
+    }:
         try:
             student = find_student_by_line_user_id(user_id)
             if student:
@@ -389,6 +394,7 @@ def handle_message(event):
             tracker,
             user_id,
             student_id=command_student_id,
+            is_private=getattr(event.source, "type", "") == "user",
         )
     except Exception as error:
         print("COMMAND PROCESSING ERROR:", repr(error))
@@ -629,6 +635,44 @@ def handle_postback(event):
                         event.reply_token,
                         "For privacy, I couldn't send your status here. Please "
                         "open a private chat with CSIE Attendance and choose My Status.",
+                    )
+            else:
+                reply_to_line(event.reply_token, response)
+        return
+
+    if action == "salary":
+        student_id = None
+        if user_id:
+            try:
+                student = find_student_by_line_user_id(user_id)
+                if student:
+                    student_id = str(student["student_id"])
+            except Exception as error:
+                print("STUDENT LOOKUP ERROR:", repr(error))
+
+        is_private = getattr(event.source, "type", "") == "user"
+        try:
+            response = handle_command(
+                "/salary",
+                tracker,
+                user_id,
+                student_id=student_id,
+                is_private=True,
+            )
+        except Exception as error:
+            print("SALARY POSTBACK ERROR:", repr(error))
+            response = "The salary estimate could not be retrieved. Please contact an administrator."
+        if response is not None:
+            if not is_private:
+                if user_id and push_to_line(user_id, response):
+                    reply_to_line(
+                        event.reply_token,
+                        "I sent your salary estimate in a private message.",
+                    )
+                else:
+                    reply_to_line(
+                        event.reply_token,
+                        "For privacy, please open a private chat with CSIE Attendance and choose Salary.",
                     )
             else:
                 reply_to_line(event.reply_token, response)

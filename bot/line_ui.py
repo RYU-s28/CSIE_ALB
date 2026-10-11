@@ -26,7 +26,7 @@ BADGE_TEXT = "#304030"
 
 
 def _pill(text: str, *, bg: str = BADGE_BG, color: str = BADGE_TEXT) -> dict[str, object]:
-    """Build a rounded pill badge."""
+    """Build a rounded pill badge with auto-shrink sizing to prevent text cropping."""
     return {
         "type": "box",
         "layout": "vertical",
@@ -36,14 +36,16 @@ def _pill(text: str, *, bg: str = BADGE_BG, color: str = BADGE_TEXT) -> dict[str
         "paddingEnd": "8px",
         "paddingTop": "2px",
         "paddingBottom": "2px",
+        "flex": 0,
         "contents": [
             {
                 "type": "text",
                 "text": text,
-                "size": "xs",
+                "size": "xxs",
                 "color": color,
                 "weight": "bold",
                 "align": "center",
+                "wrap": False,
             }
         ],
     }
@@ -115,7 +117,7 @@ def salary_overview_message(
     target_month_key: str | None = None,
 ) -> FlexMessage:
     """Build the Salary Overview card matching the leave recorded design."""
-    badge_label = "Estimate" if estimate.is_estimate else "Verified"
+    badge_label = "Est." if estimate.is_estimate else "Verified"
     month_key = target_month_key or month_label
 
     bubble: dict[str, object] = {
@@ -131,6 +133,7 @@ def salary_overview_message(
                 {
                     "type": "box",
                     "layout": "horizontal",
+                    "alignItems": "center",
                     "contents": [
                         {
                             "type": "text",
@@ -138,7 +141,7 @@ def salary_overview_message(
                             "weight": "bold",
                             "size": "xl",
                             "color": DARK_GREEN,
-                            "flex": 5,
+                            "flex": 1,
                         },
                         _pill(badge_label),
                     ],
@@ -222,6 +225,7 @@ def salary_breakdown_message(
                 {
                     "type": "box",
                     "layout": "horizontal",
+                    "alignItems": "center",
                     "contents": [
                         {
                             "type": "text",
@@ -229,9 +233,9 @@ def salary_breakdown_message(
                             "weight": "bold",
                             "size": "xl",
                             "color": DARK_GREEN,
-                            "flex": 5,
+                            "flex": 1,
                         },
-                        _pill("Estimate" if estimate.is_estimate else "Verified"),
+                        _pill("Est." if estimate.is_estimate else "Verified"),
                     ],
                 },
                 {
@@ -415,6 +419,7 @@ def leave_history_message(
                         {
                             "type": "box",
                             "layout": "horizontal",
+                            "alignItems": "center",
                             "contents": [
                                 {
                                     "type": "text",
@@ -422,7 +427,8 @@ def leave_history_message(
                                     "weight": "bold",
                                     "size": "sm",
                                     "color": DARK_GREEN,
-                                    "flex": 4,
+                                    "flex": 1,
+                                    "wrap": True,
                                 },
                                 _pill(status_text),
                             ],
@@ -518,6 +524,7 @@ def work_schedule_message(
             {
                 "type": "box",
                 "layout": "horizontal",
+                "alignItems": "center",
                 "backgroundColor": "#FFFFFF",
                 "cornerRadius": "md",
                 "paddingAll": "12px",
@@ -526,7 +533,7 @@ def work_schedule_message(
                     {
                         "type": "box",
                         "layout": "vertical",
-                        "flex": 4,
+                        "flex": 1,
                         "contents": [
                             {
                                 "type": "text",
@@ -655,10 +662,11 @@ def leave_request_menu_message(student_name: str | None = None) -> FlexMessage:
                 _button("⏱️ Half-day Leave", "action=request_leave_type&category=Half Day", margin="sm"),
                 {
                     "type": "text",
-                    "text": "Or type directly in chat: Leave [YYYY-MM-DD] [Type] [Reason]",
+                    "text": "Direct: Leave YYYY-MM-DD <Type> <Reason>",
                     "size": "xxs",
                     "color": MUTED_TEXT,
                     "align": "center",
+                    "wrap": True,
                     "margin": "md",
                 },
             ],
@@ -697,6 +705,7 @@ def help_center_message(tickets: list[dict[str, str]] | None = None) -> FlexMess
                         {
                             "type": "box",
                             "layout": "horizontal",
+                            "alignItems": "center",
                             "contents": [
                                 {
                                     "type": "text",
@@ -704,14 +713,14 @@ def help_center_message(tickets: list[dict[str, str]] | None = None) -> FlexMess
                                     "weight": "bold",
                                     "size": "sm",
                                     "color": DARK_GREEN,
-                                    "flex": 4,
+                                    "flex": 1,
                                 },
                                 _pill(t_status, bg=badge_bg, color=badge_color),
                             ],
                         },
                         {
                             "type": "text",
-                            "text": t_msg[:60] + ("..." if len(t_msg) > 60 else ""),
+                            "text": t_msg[:60],
                             "size": "xs",
                             "color": MUTED_TEXT,
                             "wrap": True,
@@ -773,16 +782,17 @@ def help_center_message(tickets: list[dict[str, str]] | None = None) -> FlexMess
                     ],
                 },
                 *ticket_boxes,
-                _button("✏️ Request Attendance Correction", "action=ticket_prompt&category=Attendance Correction", margin="sm"),
-                _button("💰 Salary Discrepancy Inquiry", "action=ticket_prompt&category=Salary Discrepancy", margin="sm"),
-                _button("📄 Missing Leave Record Ticket", "action=ticket_prompt&category=Missing Leave Record", margin="sm"),
-                _button("❓ General Help / Support", "action=ticket_prompt&category=General Inquiry", margin="sm"),
+                _button("✏️ Attendance Correction", "action=ticket_prompt&category=Attendance Correction", margin="sm"),
+                _button("💰 Salary Discrepancy", "action=ticket_prompt&category=Salary Discrepancy", margin="sm"),
+                _button("📄 Missing Leave Record", "action=ticket_prompt&category=Missing Leave Record", margin="sm"),
+                _button("❓ Help & Support", "action=ticket_prompt&category=General Inquiry", margin="sm"),
                 {
                     "type": "text",
-                    "text": "To submit a direct ticket: send /ticket <message> in chat",
+                    "text": "Direct ticket: send /ticket <message>",
                     "size": "xxs",
                     "color": MUTED_TEXT,
                     "align": "center",
+                    "wrap": True,
                     "margin": "md",
                 },
             ],

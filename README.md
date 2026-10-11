@@ -67,11 +67,18 @@ Salary details are returned only in a private chat; selecting Salary from a
 group card sends the estimate privately when LINE allows it. A student can
 withdraw only their own leave dated today or later. Each withdrawal is recorded
 in the `Audit Log` worksheet.
-In a LINE chat, `/hello` and `/help` show a Flex welcome card with Quick Reply
-buttons for personal status, salary inquiry, help, and contacting an
-administrator. Personal status is only returned in a private chat; using the
-status button in a group sends the result by private message when LINE allows
-it. A persistent Rich Menu is not set up yet.
+
+### CSIE Student Portal Rich Menu
+
+The bot includes a 6-tile persistent Rich Menu configured in `bot/rich_menu.py` with asset `assets/rich_menu.png` (2500x946 px), matching the sage green portal design:
+1. **My Attendance (出勤紀錄)**: Displays scheduled days, attended days, absences, half-days, late arrivals, today's status, and an attendance percentage progress bar (`/attendance`, `/statusme`).
+2. **Leave History (請假紀錄)**: Lists past leave records with dates, categories, and approval status, with natural language query support (e.g. "Show me all my sick leaves in September", `/leaves [month] [category]`) and a button to request corrections.
+3. **Salary Inquiry (薪資查詢)**: Shows take-home pay, gross earnings, itemized deductions, worked hours, and an itemized breakdown with overtime calculation (`/salary [YYYY-MM] [overtime_hours]`). Marked as estimates unless actual payroll data is imported.
+4. **Work Schedule (工作日曆)**: Shows upcoming 7-day schedule with workday, rest day, and holiday badges, integrated with the Google Sheets `Work Calendar` tab and defaulting to Wednesday–Sunday workdays (`/schedule`, `/calendar`).
+5. **Leave Request (請假申請)**: Guided menu for submitting sick, personal, menstrual, annual, and half-day leave notices with explicit notice that submission is flagged for admin review and does not automatically imply HR approval (`/leaverequest`).
+6. **Help Center (服務中心)**: Service ticket system for attendance correction, missing records, salary inquiries, and general questions, displaying ticket statuses and administrator responses (`/ticket`, `/helpcenter`).
+
+In a LINE chat, `/hello` and `/help` show the CSIE Student Portal card matching the same design with quick actions for all features. Administrators can run `/setuprichmenu` to recreate or refresh the default Rich Menu in LINE.
 
 After a leave record is successfully written, the bot sends a Flex confirmation
 card with the saved category, date, and stable attendance record ID. Existing

@@ -1405,3 +1405,207 @@ def mark_present_in_monthly_report(target_date: date) -> None:
             update_monthly_report_cell(student_id, target_date, "出席")
     except Exception as error:
         print("MARK PRESENT ERROR:", repr(error))
+
+
+def get_student_tickets(student_id: str) -> list[dict[str, str]]:
+    """Retrieve all tickets submitted by or for a student."""
+    sheet = _ensure_named_sheet("Tickets", TICKET_HEADERS)
+    if sheet is None:
+        return []
+    rows = sheet.get_all_values()
+    student_id_str = str(student_id).strip()
+    matching = []
+    for row in rows[1:]:
+        if len(row) >= 3 and str(row[2]).strip() == student_id_str:
+            padded = row + [""] * (len(TICKET_HEADERS) - len(row))
+            matching.append(dict(zip(TICKET_HEADERS, padded)))
+    matching.sort(key=lambda t: t.get("Created At", ""), reverse=True)
+    return matching
+
+
+def get_student_leave_records(
+    student_id: str,
+    target_month: date | None = None,
+    category: str | None = None,
+) -> list[dict[str, str]]:
+    """Retrieve leave records for a student, optionally filtered by month or category."""
+    all_rows = get_attendance_rows()
+    student_id_str = str(student_id).strip()
+    month_prefix = target_month.strftime("%Y-%m") if target_month else None
+    category_cf = category.casefold().strip() if category else None
+
+    results = []
+    for row in all_rows:
+        if str(row.get("student_id", "")).strip() != student_id_str:
+            continue
+        row_type = row.get("type", "").strip()
+        if row_type in {"出席", "遲到", "不坐公交車"}:
+            continue
+        row_date = row.get("date", "")
+        if month_prefix and not row_date.startswith(month_prefix):
+            continue
+        if category_cf:
+            if category_cf not in row_type.casefold() and row_type.casefold() not in category_cf:
+                continue
+        results.append(row)
+
+    results.sort(key=lambda r: r.get("date", ""), reverse=True)
+    return results
+
+
+def get_student_attendance_summary(
+    student_id: str,
+    target_month: date,
+) -> dict[str, object]:
+    """Compile monthly attendance statistics for a student."""
+    from scheduler.work_calendar import is_workday
+    from datetime import timedelta
+
+    year = target_month.year
+    month = target_month.month
+    if month == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month + 1, 1)
+
+    current_date = date(year, month, 1)
+    scheduled_days = 0
+    today = datetime.now(ZoneInfo("Asia/Taipei")).date()
+
+    while current_date < next_month:
+        if is_workday(current_date):
+            scheduled_days += 1
+        current_date += timedelta(days=1)
+
+    full_days = 0
+    half_days = 0
+    try:
+        full_days, half_days = get_monthly_attendance_counts(student_id, target_month)
+    except Exception:
+        pass
+
+    all_rows = get_attendance_rows()
+    student_id_str = str(student_id).strip()
+    month_prefix = target_month.strftime("%Y-%m")
+
+    absent_days = 0
+    late_days = 0
+    half_day_rows = 0
+    for row in all_rows:
+        if str(row.get("student_id", "")).strip() != student_id_str:
+            continue
+        row_date = row.get("date", "")
+        if not row_date.startswith(month_prefix):
+            continue
+        row_type = row.get("type", "").strip()
+        if row_type == "遲到":
+            late_days += 1
+        elif row_type == "半天":
+            half_day_rows += 1
+        elif row_type not in {"出席", "不坐公交車"}:
+            absent_days += 1
+
+    if half_day_rows > half_days:
+        half_days = half_day_rows
+
+    if full_days > 0:
+        attended_days = full_days
+    else:
+        attended_days = max(0, scheduled_days - absent_days - int(half_days * 0.5))
+
+    if scheduled_days > 0:
+        effective_attended = attended_days + half_days * 0.5
+        attendance_pct = min(100, max(0, round((effective_attended / scheduled_days) * 100)))
+    else:
+        attendance_pct = 100
+
+    today_record = get_attendance_record(student_id, today)
+    if today_record:
+        rec_type = today_record.get("type", "")
+        today_status = f"{rec_type} (已記錄)" if rec_type else "已記錄"
+    else:
+        if is_workday(today):
+            today_status = "正常出勤 (排班日)"
+        else:
+            today_status = "休假 (休息日)"
+
+    return {
+        "scheduled_days": scheduled_days,
+        "attended_days": attended_days,
+        "absent_days": absent_days,
+        "half_days": half_days,
+        "late_days": late_days,
+        "attendance_pct": attendance_pct,
+        "today_status": today_status,
+        "month_label": target_month.strftime("%B %Y"),
+    }
+
+
+def get_work_calendar_schedule(
+    start_date: date | None = None,
+    days: int = 7,
+) -> list[dict[str, object]]:
+    """Fetch upcoming schedule from the Work Calendar tab or default to Wed-Sun."""
+    from scheduler.work_calendar import is_workday
+    from datetime import timedelta
+    ensure_sheet_state()
+    today = datetime.now(ZoneInfo("Asia/Taipei")).date()
+    start = start_date or today
+
+    calendar_sheet = None
+    if spreadsheet is not None:
+        for title in ("Work Calendar", "Calendar", "Schedule", "工作日曆"):
+            try:
+                calendar_sheet = spreadsheet.worksheet(title)
+                break
+            except WorksheetNotFound:
+                pass
+
+    sheet_overrides = {}
+    if calendar_sheet is not None:
+        try:
+            records = calendar_sheet.get_all_values()
+            if records and len(records) > 1:
+                header = [str(c).strip().lower() for c in records[0]]
+                date_col = next((i for i, h in enumerate(header) if "date" in h or "日期" in h), 0)
+                type_col = next((i for i, h in enumerate(header) if "type" in h or "status" in h or "類型" in h or "狀態" in h), 1)
+                note_col = next((i for i, h in enumerate(header) if "note" in h or "備註" in h or "holiday" in h or "說明" in h), -1)
+
+                for r in records[1:]:
+                    if len(r) > date_col:
+                        raw_d = str(r[date_col]).strip()
+                        try:
+                            d_parsed = date.fromisoformat(raw_d[:10])
+                            status_val = str(r[type_col]).strip() if len(r) > type_col else ""
+                            note_val = str(r[note_col]).strip() if note_col >= 0 and len(r) > note_col else ""
+                            sheet_overrides[d_parsed] = (status_val, note_val)
+                        except (ValueError, IndexError):
+                            pass
+        except Exception as error:
+            print("WORK CALENDAR READ ERROR:", repr(error))
+
+    schedule_list = []
+    zh_weekdays = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
+    for i in range(days):
+        day = start + timedelta(days=i)
+        if day in sheet_overrides:
+            s_type, s_note = sheet_overrides[day]
+            is_work = "work" in s_type.lower() or "上班" in s_type or "出勤" in s_type
+            display_type = s_type or ("Workday" if is_work else "Rest Day")
+            note = s_note or ("Scheduled workday" if is_work else "Rest day")
+        else:
+            is_work = is_workday(day)
+            display_type = "Workday" if is_work else "Rest Day"
+            note = "Scheduled workday (8 hrs)" if is_work else "Standard rest day"
+
+        schedule_list.append({
+            "date": day,
+            "date_str": day.strftime("%Y-%m-%d"),
+            "formatted_date": day.strftime("%b %d"),
+            "weekday_en": day.strftime("%a"),
+            "weekday_zh": zh_weekdays[day.weekday()],
+            "is_workday": is_work,
+            "type": display_type,
+            "note": note,
+        })
+    return schedule_list

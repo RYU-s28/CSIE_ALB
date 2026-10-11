@@ -34,8 +34,23 @@ from attendance.leave_message import (
     LEAVE_TYPE_LABELS,
     parse_attendance_date,
 )
-from bot.commands import handle_command, is_admin_user, normalize_command
-from bot.line_ui import welcome_message
+from attendance.salary import calculate_salary
+from bot.commands import (
+    handle_command,
+    is_admin_user,
+    normalize_command,
+    try_handle_natural_portal_query,
+)
+from bot.line_ui import (
+    help_center_message,
+    leave_history_message,
+    leave_request_menu_message,
+    my_attendance_message,
+    salary_breakdown_message,
+    salary_overview_message,
+    welcome_message,
+    work_schedule_message,
+)
 from ui.leave_confirmation import (
     leave_confirmation_message,
     withdrawal_confirmation_message,
@@ -47,6 +62,11 @@ from database.google_sheets import (
     find_students_by_display_name,
     find_student_by_line_user_id,
     get_attendance_record_by_id,
+    get_monthly_attendance_counts,
+    get_student_attendance_summary,
+    get_student_leave_records,
+    get_student_tickets,
+    get_work_calendar_schedule,
     LineRegistrationConflictError,
     register_line_user,
     update_monthly_report_cell,
@@ -78,6 +98,12 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     from scheduler.daily_report import scheduler, start_scheduler
 
     start_scheduler()
+    try:
+        from bot.rich_menu import setup_rich_menu
+        setup_rich_menu()
+    except Exception as error:
+        print("LIFESPAN RICH MENU INIT ERROR:", repr(error))
+
     try:
         yield
     finally:
@@ -375,12 +401,7 @@ def handle_message(event):
     print("MESSAGE:", text)
 
     command_student_id = None
-    if user_id and normalize_command(text) in {
-        "statusme",
-        "clear",
-        "ticket",
-        "salary",
-    }:
+    if user_id:
         try:
             student = find_student_by_line_user_id(user_id)
             if student:
@@ -388,13 +409,14 @@ def handle_message(event):
         except Exception as error:
             print("STUDENT LOOKUP ERROR:", repr(error))
 
+    is_private_chat = getattr(event.source, "type", "") == "user"
     try:
         command_response = handle_command(
             text,
             tracker,
             user_id,
             student_id=command_student_id,
-            is_private=getattr(event.source, "type", "") == "user",
+            is_private=is_private_chat,
         )
     except Exception as error:
         print("COMMAND PROCESSING ERROR:", repr(error))
@@ -405,6 +427,19 @@ def handle_message(event):
             command_response,
         )
         return
+
+    # Check natural portal queries (e.g. 'Show me all my sick leaves in September', '出勤紀錄', etc.)
+    try:
+        natural_portal_response = try_handle_natural_portal_query(
+            text,
+            command_student_id,
+            is_private=is_private_chat,
+        )
+        if natural_portal_response is not None:
+            reply_to_line(event.reply_token, natural_portal_response)
+            return
+    except Exception as error:
+        print("NATURAL PORTAL QUERY ERROR:", repr(error))
 
     if not text.strip():
         return
@@ -601,6 +636,162 @@ def handle_postback(event):
 
     if action == "help":
         reply_to_line(event.reply_token, welcome_message())
+        return
+
+    if action == "richmenu_attendance":
+        student_id = None
+        if user_id:
+            try:
+                student = find_student_by_line_user_id(user_id)
+                if student:
+                    student_id = str(student["student_id"])
+            except Exception as error:
+                print("STUDENT LOOKUP ERROR:", repr(error))
+        if not student_id:
+            reply_to_line(
+                event.reply_token,
+                "Your LINE account is not linked to a student record. Please contact an administrator.",
+            )
+            return
+        target_month = _today_taipei().replace(day=1)
+        summary = get_student_attendance_summary(student_id, target_month)
+        msg = my_attendance_message(summary, month_label=target_month.strftime("%B %Y"))
+        reply_to_line(event.reply_token, msg)
+        return
+
+    if action == "richmenu_leave_history":
+        student_id = None
+        if user_id:
+            try:
+                student = find_student_by_line_user_id(user_id)
+                if student:
+                    student_id = str(student["student_id"])
+            except Exception as error:
+                print("STUDENT LOOKUP ERROR:", repr(error))
+        if not student_id:
+            reply_to_line(
+                event.reply_token,
+                "Your LINE account is not linked to a student record. Please contact an administrator.",
+            )
+            return
+        records = get_student_leave_records(student_id)
+        msg = leave_history_message(records, month_label=_today_taipei().strftime("%B %Y"))
+        reply_to_line(event.reply_token, msg)
+        return
+
+    if action == "richmenu_salary":
+        student_id = None
+        if user_id:
+            try:
+                student = find_student_by_line_user_id(user_id)
+                if student:
+                    student_id = str(student["student_id"])
+            except Exception as error:
+                print("STUDENT LOOKUP ERROR:", repr(error))
+        if not student_id:
+            reply_to_line(
+                event.reply_token,
+                "Your LINE account is not linked to a student record. Please contact an administrator.",
+            )
+            return
+        target_month = _today_taipei().replace(day=1)
+        try:
+            full_days, half_days = get_monthly_attendance_counts(student_id, target_month)
+            estimate = calculate_salary(full_days, half_days)
+            msg = salary_overview_message(
+                estimate,
+                month_label=target_month.strftime("%B %Y"),
+                target_month_key=target_month.strftime("%Y-%m"),
+            )
+        except Exception as error:
+            print("SALARY LOOKUP ERROR:", repr(error))
+            msg = "Could not calculate salary estimate. Please contact an administrator."
+        is_private = getattr(event.source, "type", "") == "user"
+        if not is_private:
+            if user_id and push_to_line(user_id, msg):
+                reply_to_line(event.reply_token, "I sent your salary estimate in a private message.")
+            else:
+                reply_to_line(event.reply_token, "For privacy, please open a private chat with CSIE Attendance and choose Salary Inquiry.")
+        else:
+            reply_to_line(event.reply_token, msg)
+        return
+
+    if action == "salary_breakdown":
+        student_id = None
+        if user_id:
+            try:
+                student = find_student_by_line_user_id(user_id)
+                if student:
+                    student_id = str(student["student_id"])
+            except Exception as error:
+                print("STUDENT LOOKUP ERROR:", repr(error))
+        if not student_id:
+            reply_to_line(event.reply_token, "Student record not found.")
+            return
+        target_month = _today_taipei().replace(day=1)
+        month_arg = data.get("month", [""])[0]
+        if month_arg:
+            try:
+                target_month = date.fromisoformat(f"{month_arg[:7]}-01")
+            except ValueError:
+                pass
+        try:
+            full_days, half_days = get_monthly_attendance_counts(student_id, target_month)
+            estimate = calculate_salary(full_days, half_days)
+            msg = salary_breakdown_message(estimate, month_label=target_month.strftime("%B %Y"))
+            reply_to_line(event.reply_token, msg)
+        except Exception as error:
+            print("SALARY BREAKDOWN ERROR:", repr(error))
+            reply_to_line(event.reply_token, "Could not load salary breakdown.")
+        return
+
+    if action == "richmenu_schedule":
+        schedule_list = get_work_calendar_schedule(days=7)
+        msg = work_schedule_message(schedule_list, title_label="Upcoming 7 Days")
+        reply_to_line(event.reply_token, msg)
+        return
+
+    if action == "richmenu_leave_request":
+        student_name = None
+        if user_id:
+            student = find_student_by_line_user_id(user_id)
+            if student:
+                student_name = str(student.get("name", ""))
+        msg = leave_request_menu_message(student_name)
+        reply_to_line(event.reply_token, msg)
+        return
+
+    if action == "richmenu_help":
+        tickets = []
+        if user_id:
+            student = find_student_by_line_user_id(user_id)
+            if student:
+                tickets = get_student_tickets(str(student["student_id"]))
+        msg = help_center_message(tickets)
+        reply_to_line(event.reply_token, msg)
+        return
+
+    if action == "request_leave_type":
+        cat = data.get("category", ["請假"])[0]
+        reply_to_line(
+            event.reply_token,
+            f"📝 Apply for {cat}:\n\n"
+            "Please send your leave details in this format:\n\n"
+            f"請假 YYYY-MM-DD {cat} <reason>\n\n"
+            f"Example: 請假 {_today_taipei().isoformat()} {cat} 身體不適\n\n"
+            "⚠️ Note: Submission will be flagged for administrator review and does not automatically imply approval.",
+        )
+        return
+
+    if action == "ticket_prompt":
+        cat = data.get("category", ["Inquiry"])[0]
+        reply_to_line(
+            event.reply_token,
+            f"🎫 Submit Ticket ({cat}):\n\n"
+            "Please send your request or correction details:\n\n"
+            f"/ticket [{cat}] <details of your request>\n\n"
+            "Example: /ticket [Attendance Correction] Please review my absence on 2026-10-08",
+        )
         return
 
     if action == "statusme":

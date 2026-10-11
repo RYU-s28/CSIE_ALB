@@ -15,6 +15,9 @@ class SalaryEstimate:
     health_insurance: Decimal
     income_tax: Decimal
     net_salary: Decimal
+    overtime_hours: int = 0
+    overtime_pay: Decimal = Decimal("0")
+    is_estimate: bool = True
 
     @property
     def total_deductions(self) -> Decimal:
@@ -26,14 +29,25 @@ class SalaryEstimate:
         )
 
 
-def calculate_salary(full_days: int, half_days: int) -> SalaryEstimate:
+def calculate_salary(
+    full_days: int,
+    half_days: int,
+    overtime_hours: int = 0,
+    *,
+    is_estimate: bool = True,
+) -> SalaryEstimate:
     """Calculate gross pay and the specified deductions from attendance days."""
 
-    if full_days < 0 or half_days < 0:
+    if full_days < 0 or half_days < 0 or overtime_hours < 0:
         raise ValueError("Attendance day counts cannot be negative.")
 
-    total_hours = full_days * 8 + half_days * 4
-    gross_salary = Decimal(total_hours * 196)
+    base_hours = full_days * 8 + half_days * 4
+    total_hours = base_hours + overtime_hours
+    base_gross = Decimal(base_hours * 196)
+    # Standard overtime rate: 1.34x NT$196 ≈ NT$263/hr
+    overtime_pay = Decimal(overtime_hours * 263)
+    gross_salary = base_gross + overtime_pay
+
     welfare_fund = gross_salary * Decimal("0.005")
     labor_insurance = Decimal("679")
     health_insurance = Decimal("460")
@@ -56,4 +70,7 @@ def calculate_salary(full_days: int, half_days: int) -> SalaryEstimate:
         health_insurance=health_insurance,
         income_tax=income_tax,
         net_salary=net_salary,
+        overtime_hours=overtime_hours,
+        overtime_pay=overtime_pay,
+        is_estimate=is_estimate,
     )

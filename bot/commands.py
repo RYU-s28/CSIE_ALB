@@ -18,15 +18,28 @@ from attendance.report import StudentDisplay, build_report
 from attendance.salary import calculate_salary
 from database import google_sheets
 from scheduler.work_calendar import is_workday
-from bot.line_ui import salary_inquiry_message
+from bot.line_ui import (
+    help_center_message,
+    leave_history_message,
+    leave_request_menu_message,
+    my_attendance_message,
+    salary_breakdown_message,
+    salary_overview_message,
+    welcome_message,
+    work_schedule_message,
+)
 
 
-PUBLIC_COMMANDS = {"hello", "statusme", "clear", "ticket", "salary"}
+PUBLIC_COMMANDS = {
+    "hello", "statusme", "attendance", "clear", "ticket", "salary",
+    "leaves", "leavehistory", "schedule", "calendar", "leaverequest", "request",
+    "helpcenter",
+}
 ADMIN_COMMANDS = {
     "ping", "report", "summary", "status", "set", "rm", "range",
-    "undo", "tickets", "adminhelp",
+    "undo", "tickets", "adminhelp", "setuprichmenu",
 }
-DISABLED_PUBLIC_COMMANDS = {"attendance", "absent"}
+DISABLED_PUBLIC_COMMANDS = {"absent"}
 STATUS_ALIASES = {
     "病假": "病假",
     "sick": "病假",
@@ -303,11 +316,17 @@ def _run_admin_command(tokens: list[str], actor: str) -> str:
             )
             return f"Ticket #{ticket_id} {'closed' if action == 'close' else 'reopened'}." if updated else "Ticket not found."
         return "Usage: /ticket show <id> | /ticket close <id> | /ticket reopen <id>"
+    if command == "setuprichmenu":
+        from bot.rich_menu import setup_rich_menu
+        menu_id = setup_rich_menu(force=True)
+        if menu_id:
+            return f"Rich Menu successfully setup and set as default:\nID: {menu_id}"
+        return "Failed to setup Rich Menu. Check server logs."
     return (
         "Admin commands:\n/ping\n/report [date]\n/summary [date]\n"
         "/status <student> [date]\n/set <student> <status> [date]\n"
         "/rm <student> [date]\n/range <student> <status> <start> <end>\n"
-        "/undo\n/tickets\n/ticket show|close|reopen <id>\n/adminhelp"
+        "/undo\n/tickets\n/ticket show|close|reopen <id>\n/setuprichmenu\n/adminhelp"
     )
 
 
@@ -395,72 +414,125 @@ def handle_command(
     if command in DISABLED_PUBLIC_COMMANDS:
         return "That public command has been removed. Use /hello to see student commands."
 
-    if command == "hello":
-        return (
-            "CSIE Attendance Bot\n\n"
-            "Leave notifications are recognized automatically. You can:\n"
-            "/statusme [date]\n/clear [date]\n"
-            "/ticket <message>\n\n"
-            "Use /help to see these options. Attendance changes must be "
-            "handled by an administrator."
-        )
-    if command == "help":
-        return (
-            "Student help:\n"
-            "• Leave notifications are recognized automatically.\n"
-            "• Check status with /statusme [date].\n"
-            "• Check your estimated salary with /salary [YYYY-MM].\n"
-            "• Contact an administrator with /ticket <message>.\n"
-            "• Use /clear [date] to withdraw today's or a future leave."
-        )
+    if command in {"hello", "help"}:
+        return welcome_message()
+
+    if command == "attendance":
+        if not student_id:
+            return "Your LINE account is not linked to a student record. Please contact an administrator."
+        target_month = _today().replace(day=1)
+        if args:
+            try:
+                target_month = date.fromisoformat(f"{args[0]}-01")
+            except ValueError:
+                pass
+        try:
+            summary = google_sheets.get_student_attendance_summary(student_id, target_month)
+            return my_attendance_message(summary, month_label=target_month.strftime("%B %Y"))
+        except Exception as error:
+            print("STUDENT ATTENDANCE ERROR:", repr(error))
+            return "I couldn't retrieve your attendance summary. Please contact an administrator."
+
+    if command == "statusme":
+        if not student_id:
+            return "Your LINE account is not linked to a student record. Please contact an administrator."
+        if not args:
+            target_month = _today().replace(day=1)
+            summary = google_sheets.get_student_attendance_summary(student_id, target_month)
+            return my_attendance_message(summary, month_label=target_month.strftime("%B %Y"))
+        try:
+            target_date = _parse_date(args[0])
+            record = google_sheets.get_attendance_record(student_id, target_date)
+            if record is None:
+                return f"No attendance record found for {target_date.isoformat()}."
+            return f"{target_date.isoformat()}: {record.get('type', '待確認')}"
+        except ValueError:
+            try:
+                target_month = date.fromisoformat(f"{args[0]}-01")
+                summary = google_sheets.get_student_attendance_summary(student_id, target_month)
+                return my_attendance_message(summary, month_label=target_month.strftime("%B %Y"))
+            except ValueError:
+                return "Invalid date or month. Use today, tomorrow, YYYY-MM, or YYYY-MM-DD."
+
+    if command in {"leaves", "leavehistory"}:
+        if not student_id:
+            return "Your LINE account is not linked to a student record. Please contact an administrator."
+        target_month = None
+        category_filter = None
+        for arg in args:
+            if re.match(r"^\d{4}-\d{2}$", arg):
+                try:
+                    target_month = date.fromisoformat(f"{arg}-01")
+                except ValueError:
+                    pass
+            elif arg in STATUS_ALIASES:
+                category_filter = STATUS_ALIASES[arg]
+            else:
+                category_filter = arg
+        try:
+            records = google_sheets.get_student_leave_records(
+                student_id,
+                target_month=target_month,
+                category=category_filter,
+            )
+            month_label = target_month.strftime("%B %Y") if target_month else "Recent Records"
+            return leave_history_message(records, month_label=month_label)
+        except Exception as error:
+            print("STUDENT LEAVES ERROR:", repr(error))
+            return "I couldn't retrieve your leave history. Please contact an administrator."
+
+    if command in {"schedule", "calendar"}:
+        try:
+            schedule_list = google_sheets.get_work_calendar_schedule(days=7)
+            return work_schedule_message(schedule_list, title_label="Upcoming 7 Days")
+        except Exception as error:
+            print("STUDENT SCHEDULE ERROR:", repr(error))
+            return "I couldn't retrieve the work calendar. Please contact an administrator."
+
+    if command in {"leaverequest", "request"}:
+        student = google_sheets.find_student_by_id(student_id) if student_id else None
+        name = str(student.get("name", "")) if student else None
+        return leave_request_menu_message(name)
+
+    if command == "helpcenter":
+        tickets = google_sheets.get_student_tickets(student_id) if student_id else []
+        return help_center_message(tickets)
+
     if command == "salary":
         if not is_private:
             return "For privacy, salary inquiries are only available in a private chat with CSIE Attendance."
-        if len(args) > 1:
-            return "Usage: /salary [YYYY-MM]"
         if not student_id:
             return "Your LINE account is not linked to a student record. Please contact an administrator."
-        try:
-            target_month = (
-                date.fromisoformat(f"{args[0]}-01")
-                if args
-                else _today().replace(day=1)
-            )
-        except ValueError:
-            return "Invalid month. Use YYYY-MM, for example /salary 2026-10."
+        target_month = _today().replace(day=1)
+        overtime_hours = 0
+        if len(args) >= 1:
+            try:
+                target_month = date.fromisoformat(f"{args[0]}-01")
+            except ValueError:
+                return "Invalid month. Use YYYY-MM, for example /salary 2026-10."
+        if len(args) >= 2:
+            try:
+                overtime_hours = int(args[1])
+            except ValueError:
+                pass
         try:
             full_days, half_days = google_sheets.get_monthly_attendance_counts(
                 student_id,
                 target_month,
             )
-            estimate = calculate_salary(full_days, half_days)
+            estimate = calculate_salary(full_days, half_days, overtime_hours=overtime_hours)
         except (RuntimeError, ValueError) as error:
             print("STUDENT SALARY ERROR:", repr(error))
             return (
                 "I couldn't retrieve your monthly attendance for that salary "
                 "estimate. Please check the month or contact an administrator."
             )
-        return salary_inquiry_message(
+        return salary_overview_message(
             estimate,
             month_label=target_month.strftime("%B %Y"),
+            target_month_key=target_month.strftime("%Y-%m"),
         )
-    if command == "statusme":
-        if len(args) > 1:
-            return "Usage: /statusme [date]"
-        if not student_id:
-            return "Your LINE account is not linked to a student record. Please contact an administrator."
-        try:
-            target_date = _parse_date(args[0] if args else None)
-        except ValueError:
-            return "Invalid date. Use today, tomorrow, or YYYY-MM-DD."
-        try:
-            record = google_sheets.get_attendance_record(student_id, target_date)
-        except (RuntimeError, ValueError) as error:
-            print("STUDENT STATUS ERROR:", repr(error))
-            return "I couldn't retrieve your attendance. Please contact an administrator."
-        if record is None:
-            return f"No attendance record found for {target_date.isoformat()}."
-        return f"{target_date.isoformat()}: {record.get('type', '待確認')}"
+
     if command == "clear":
         if len(args) > 1:
             return "Usage: /clear [date]"
@@ -485,11 +557,13 @@ def handle_command(
             f"Your leave for {target_date.isoformat()} "
             f"({deleted['old_status']}) was withdrawn."
         )
+
     if command == "ticket":
         if not user_id or not student_id:
             return "Your LINE account is not linked to a student record. Please contact an administrator."
         if not args:
-            return "Usage: /ticket <message>"
+            tickets = google_sheets.get_student_tickets(student_id)
+            return help_center_message(tickets)
         try:
             ticket_id = google_sheets.create_ticket(
                 student_id, user_id, args[0],
@@ -500,9 +574,115 @@ def handle_command(
         student = google_sheets.find_student_by_id(student_id)
         name = str(student.get("name", "")) if student else ""
         return (
-            f"Ticket #{ticket_id}\n\nStudent: {student_id} {name}\n"
+            f"Ticket #{ticket_id} Created\n\nStudent: {student_id} {name}\n"
             "Status: OPEN\n\nRequest:\n"
-            f"{args[0]}\n\nAn administrator will review your request."
+            f"{args[0]}\n\nAn administrator will review and respond to your ticket."
         )
+
+    return None
+
+
+_MONTH_NAMES = {
+    "january": 1, "jan": 1,
+    "february": 2, "feb": 2,
+    "march": 3, "mar": 3,
+    "april": 4, "apr": 4,
+    "may": 5,
+    "june": 6, "jun": 6,
+    "july": 7, "jul": 7,
+    "august": 8, "aug": 8,
+    "september": 9, "sep": 9, "sept": 9,
+    "october": 10, "oct": 10,
+    "november": 11, "nov": 11,
+    "december": 12, "dec": 12,
+}
+
+
+def try_handle_natural_portal_query(
+    text: str,
+    student_id: str | None,
+    *,
+    is_private: bool = True,
+) -> FlexMessage | str | None:
+    """Detect natural language portal queries like 'Show me all my sick leaves in September'."""
+    cleaned = (text or "").strip()
+    if not cleaned or cleaned.startswith("/"):
+        return None
+    lower = cleaned.lower()
+
+    # 1. Attendance queries
+    if lower in {"出勤紀錄", "出勤", "my attendance", "attendance summary"} or (
+        "attendance" in lower and ("show" in lower or "my" in lower or "check" in lower)
+    ):
+        if not student_id:
+            return "Your LINE account is not linked to a student record. Please contact an administrator."
+        target_month = _today().replace(day=1)
+        summary = google_sheets.get_student_attendance_summary(student_id, target_month)
+        return my_attendance_message(summary, month_label=target_month.strftime("%B %Y"))
+
+    # 2. Leave history queries (e.g., "Show me all my sick leaves in September", "請假紀錄")
+    if (
+        lower in {"請假紀錄", "請假記錄", "leave history", "my leaves"}
+        or ("leaves" in lower or "leave" in lower)
+        and ("show" in lower or "history" in lower or "record" in lower or "sick" in lower or "personal" in lower)
+    ):
+        if not student_id:
+            return "Your LINE account is not linked to a student record. Please contact an administrator."
+
+        # Detect month
+        target_month = None
+        for m_name, m_num in _MONTH_NAMES.items():
+            if re.search(rf"\b{m_name}\b", lower):
+                curr_year = _today().year
+                target_month = date(curr_year, m_num, 1)
+                break
+
+        # Detect category
+        category = None
+        if "sick" in lower or "病假" in cleaned:
+            category = "病假"
+        elif "personal" in lower or "事假" in cleaned:
+            category = "事假"
+        elif "menstrual" in lower or "經痛" in cleaned:
+            category = "經痛"
+        elif "annual" in lower or "特休" in cleaned:
+            category = "特休"
+        elif "half" in lower or "半天" in cleaned:
+            category = "半天"
+
+        records = google_sheets.get_student_leave_records(student_id, target_month=target_month, category=category)
+        month_label = target_month.strftime("%B %Y") if target_month else "Recent Records"
+        return leave_history_message(records, month_label=month_label)
+
+    # 3. Salary queries
+    if lower in {"薪資查詢", "薪資", "查薪資", "salary inquiry", "salary overview", "my salary"}:
+        if not is_private:
+            return "For privacy, salary inquiries are only available in a private chat with CSIE Attendance."
+        if not student_id:
+            return "Your LINE account is not linked to a student record. Please contact an administrator."
+        target_month = _today().replace(day=1)
+        full_days, half_days = google_sheets.get_monthly_attendance_counts(student_id, target_month)
+        estimate = calculate_salary(full_days, half_days)
+        return salary_overview_message(
+            estimate,
+            month_label=target_month.strftime("%B %Y"),
+            target_month_key=target_month.strftime("%Y-%m"),
+        )
+
+    # 4. Schedule queries
+    if lower in {"工作日曆", "日曆", "排班", "work schedule", "schedule", "my schedule"}:
+        schedule_list = google_sheets.get_work_calendar_schedule(days=7)
+        return work_schedule_message(schedule_list, title_label="Upcoming 7 Days")
+
+    # 5. Leave request menu
+    if lower in {"請假申請", "我要請假", "leave request", "apply leave"}:
+        student = google_sheets.find_student_by_id(student_id) if student_id else None
+        name = str(student.get("name", "")) if student else None
+        return leave_request_menu_message(name)
+
+    # 6. Help center queries
+    if lower in {"服務中心", "客服", "工單", "help center", "support", "helpdesk"}:
+        tickets = google_sheets.get_student_tickets(student_id) if student_id else []
+        return help_center_message(tickets)
 
     return None

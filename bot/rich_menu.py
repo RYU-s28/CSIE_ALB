@@ -29,16 +29,16 @@ IMAGE_PATH = Path(__file__).resolve().parent.parent / "assets" / "rich_menu.png"
 
 
 def build_rich_menu_request() -> RichMenuRequest:
-    """Build the 6-tile RichMenuRequest matching the CSIE Student Portal design."""
+    """Build the 6-tile RichMenuRequest matching the LINE compact 6-tile template (2500x843)."""
     return RichMenuRequest(
-        size=RichMenuSize(width=2500, height=946),
+        size=RichMenuSize(width=2500, height=843),
         selected=True,
         name=RICH_MENU_NAME,
         chat_bar_text=CHAT_BAR_TEXT,
         areas=[
             # Row 1, Col 1: My Attendance
             RichMenuArea(
-                bounds=RichMenuBounds(x=0, y=0, width=833, height=530),
+                bounds=RichMenuBounds(x=0, y=0, width=833, height=421),
                 action=PostbackAction(
                     label="My Attendance",
                     data="action=richmenu_attendance",
@@ -47,7 +47,7 @@ def build_rich_menu_request() -> RichMenuRequest:
             ),
             # Row 1, Col 2: Leave History
             RichMenuArea(
-                bounds=RichMenuBounds(x=833, y=0, width=834, height=530),
+                bounds=RichMenuBounds(x=833, y=0, width=834, height=421),
                 action=PostbackAction(
                     label="Leave History",
                     data="action=richmenu_leave_history",
@@ -56,7 +56,7 @@ def build_rich_menu_request() -> RichMenuRequest:
             ),
             # Row 1, Col 3: Salary Inquiry
             RichMenuArea(
-                bounds=RichMenuBounds(x=1667, y=0, width=833, height=530),
+                bounds=RichMenuBounds(x=1667, y=0, width=833, height=421),
                 action=PostbackAction(
                     label="Salary Inquiry",
                     data="action=richmenu_salary",
@@ -65,7 +65,7 @@ def build_rich_menu_request() -> RichMenuRequest:
             ),
             # Row 2, Col 1: Work Schedule
             RichMenuArea(
-                bounds=RichMenuBounds(x=0, y=530, width=833, height=416),
+                bounds=RichMenuBounds(x=0, y=421, width=833, height=422),
                 action=PostbackAction(
                     label="Work Schedule",
                     data="action=richmenu_schedule",
@@ -74,7 +74,7 @@ def build_rich_menu_request() -> RichMenuRequest:
             ),
             # Row 2, Col 2: Leave Request
             RichMenuArea(
-                bounds=RichMenuBounds(x=833, y=530, width=834, height=416),
+                bounds=RichMenuBounds(x=833, y=421, width=834, height=422),
                 action=PostbackAction(
                     label="Leave Request",
                     data="action=richmenu_leave_request",
@@ -83,7 +83,7 @@ def build_rich_menu_request() -> RichMenuRequest:
             ),
             # Row 2, Col 3: Help Center
             RichMenuArea(
-                bounds=RichMenuBounds(x=1667, y=530, width=833, height=416),
+                bounds=RichMenuBounds(x=1667, y=421, width=833, height=422),
                 action=PostbackAction(
                     label="Help Center",
                     data="action=richmenu_help",
@@ -94,15 +94,16 @@ def build_rich_menu_request() -> RichMenuRequest:
     )
 
 
-def setup_rich_menu(*, force: bool = False) -> str | None:
+def setup_rich_menu(*, force: bool = False, target_image: Path | None = None) -> str | None:
     """Create, upload image for, and set default Rich Menu in LINE."""
     token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
     if not token:
         print("RICH MENU SETUP: LINE_CHANNEL_ACCESS_TOKEN is missing.")
         return None
 
-    if not IMAGE_PATH.exists():
-        print(f"RICH MENU SETUP: Image file not found at {IMAGE_PATH}")
+    img_path = target_image or IMAGE_PATH
+    if not img_path.exists():
+        print(f"RICH MENU SETUP: Image file not found at {img_path}")
         return None
 
     configuration = Configuration(access_token=token)
@@ -110,16 +111,30 @@ def setup_rich_menu(*, force: bool = False) -> str | None:
         with ApiClient(configuration) as api_client:
             messaging_api = MessagingApi(api_client)
 
-            if not force:
-                try:
-                    menu_list = messaging_api.get_rich_menu_list()
-                    for menu in menu_list.richmenus:
-                        if menu.name == RICH_MENU_NAME:
+            # Look up existing menus
+            try:
+                menu_list = messaging_api.get_rich_menu_list()
+                for menu in menu_list.richmenus:
+                    if menu.name == RICH_MENU_NAME:
+                        # Check if old menu is outdated or force requested
+                        is_current = (
+                            menu.size.width == 2500
+                            and menu.size.height == 843
+                            and not force
+                        )
+                        if is_current:
                             messaging_api.set_default_rich_menu(menu.rich_menu_id)
-                            print(f"RICH MENU SETUP: Reusing existing menu {menu.rich_menu_id}")
+                            print(f"RICH MENU SETUP: Reusing current menu {menu.rich_menu_id}")
                             return menu.rich_menu_id
-                except Exception as error:
-                    print("RICH MENU LOOKUP WARNING:", repr(error))
+                        else:
+                            # Delete outdated rich menu to keep LINE clean
+                            try:
+                                messaging_api.delete_rich_menu(menu.rich_menu_id)
+                                print(f"RICH MENU SETUP: Cleaned up old menu {menu.rich_menu_id}")
+                            except Exception:
+                                pass
+            except Exception as error:
+                print("RICH MENU LOOKUP WARNING:", repr(error))
 
             # 1. Create Rich Menu
             rich_menu_req = build_rich_menu_request()
@@ -128,7 +143,7 @@ def setup_rich_menu(*, force: bool = False) -> str | None:
             print(f"RICH MENU CREATED: {rich_menu_id}")
 
             # 2. Upload Image
-            with open(IMAGE_PATH, "rb") as image_file:
+            with open(img_path, "rb") as image_file:
                 image_data = image_file.read()
 
             upload_url = f"https://api-data.line.me/v2/bot/richmenu/{rich_menu_id}/content"

@@ -1519,15 +1519,28 @@ def get_student_attendance_summary(
     else:
         attendance_pct = 100
 
+    status_translation = {
+        "出席": "Present",
+        "遲到": "Late",
+        "病假": "Sick Leave",
+        "事假": "Personal Leave",
+        "經痛": "Menstrual Leave",
+        "特休": "Annual Leave",
+        "半天": "Half Day",
+        "回菲律賓": "Abroad",
+        "待確認": "Pending Review",
+        "不坐公交車": "No Bus",
+    }
     today_record = get_attendance_record(student_id, today)
     if today_record:
         rec_type = today_record.get("type", "")
-        today_status = f"{rec_type} (已記錄)" if rec_type else "已記錄"
+        en_status = status_translation.get(rec_type, rec_type or "Present")
+        today_status = f"{en_status} (Recorded)"
     else:
         if is_workday(today):
-            today_status = "正常出勤 (排班日)"
+            today_status = "Present (Scheduled Workday)"
         else:
-            today_status = "休假 (休息日)"
+            today_status = "Off (Rest Day)"
 
     return {
         "scheduled_days": scheduled_days,
@@ -1585,13 +1598,12 @@ def get_work_calendar_schedule(
             print("WORK CALENDAR READ ERROR:", repr(error))
 
     schedule_list = []
-    zh_weekdays = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
     for i in range(days):
         day = start + timedelta(days=i)
         if day in sheet_overrides:
             s_type, s_note = sheet_overrides[day]
             is_work = "work" in s_type.lower() or "上班" in s_type or "出勤" in s_type
-            display_type = s_type or ("Workday" if is_work else "Rest Day")
+            display_type = "Workday" if is_work else (s_type if "holiday" in s_type.lower() else "Rest Day")
             note = s_note or ("Scheduled workday" if is_work else "Rest day")
         else:
             is_work = is_workday(day)
@@ -1603,7 +1615,6 @@ def get_work_calendar_schedule(
             "date_str": day.strftime("%Y-%m-%d"),
             "formatted_date": day.strftime("%b %d"),
             "weekday_en": day.strftime("%a"),
-            "weekday_zh": zh_weekdays[day.weekday()],
             "is_workday": is_work,
             "type": display_type,
             "note": note,

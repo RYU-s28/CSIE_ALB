@@ -357,7 +357,7 @@ def my_attendance_message(
                 _stat_row("Days absent", str(summary.get("absent_days", 0)), value_color=DEDUCTION_RED, margin="sm"),
                 _stat_row("Half-days", str(summary.get("half_days", 0)), margin="sm"),
                 _stat_row("Late arrivals", str(summary.get("late_days", 0)), margin="sm"),
-                _stat_row("Today's status", str(summary.get("today_status", "正常出勤")), margin="sm"),
+                _stat_row("Today's status", str(summary.get("today_status", "Present")), margin="sm"),
                 # Action button
                 _button(
                     "View Attendance History",
@@ -398,8 +398,8 @@ def leave_history_message(
 
     if records:
         for rec in records[:6]:
-            cat_zh = rec.get("type", "請假")
-            cat_en = _LEAVE_EN_LABELS.get(cat_zh, cat_zh)
+            cat_val = rec.get("type", "Leave")
+            cat_en = _LEAVE_EN_LABELS.get(cat_val, cat_val)
             rec_date = rec.get("date", "")
             status_text = rec.get("status") or "Recorded"
 
@@ -497,7 +497,7 @@ def leave_history_message(
 
 
 # ======================================================================
-# 4. Work Schedule (工作日曆)
+# 4. Work Schedule
 # ======================================================================
 
 def work_schedule_message(
@@ -530,7 +530,7 @@ def work_schedule_message(
                         "contents": [
                             {
                                 "type": "text",
-                                "text": f"{day.get('date_str')} ({day.get('weekday_zh')})",
+                                "text": f"{day.get('date_str')} ({day.get('weekday_en')})",
                                 "weight": "bold",
                                 "size": "sm",
                                 "color": DARK_GREEN,
@@ -648,14 +648,14 @@ def leave_request_menu_message(student_name: str | None = None) -> FlexMessage:
                         },
                     ],
                 },
-                _button("🤒 Sick Leave (病假)", "action=request_leave_type&category=病假", margin="sm"),
-                _button("📋 Personal Leave (事假)", "action=request_leave_type&category=事假", margin="sm"),
-                _button("🌸 Menstrual Leave (經痛)", "action=request_leave_type&category=經痛", margin="sm"),
-                _button("🏖️ Annual Leave (特休)", "action=request_leave_type&category=特休", margin="sm"),
-                _button("⏱️ Half-day Leave (半天)", "action=request_leave_type&category=半天", margin="sm"),
+                _button("🤒 Sick Leave", "action=request_leave_type&category=Sick Leave", margin="sm"),
+                _button("📋 Personal Leave", "action=request_leave_type&category=Personal Leave", margin="sm"),
+                _button("🌸 Menstrual Leave", "action=request_leave_type&category=Menstrual Leave", margin="sm"),
+                _button("🏖️ Annual Leave", "action=request_leave_type&category=Annual Leave", margin="sm"),
+                _button("⏱️ Half-day Leave", "action=request_leave_type&category=Half Day", margin="sm"),
                 {
                     "type": "text",
-                    "text": "Or type directly in chat: 請假 [YYYY-MM-DD] [類別] [原因]",
+                    "text": "Or type directly in chat: Leave [YYYY-MM-DD] [Type] [Reason]",
                     "size": "xxs",
                     "color": MUTED_TEXT,
                     "align": "center",
@@ -851,11 +851,11 @@ def welcome_message() -> FlexMessage:
                         },
                     ],
                 },
-                _stat_row("My Attendance", "/statusme", bold=False, margin="sm"),
-                _stat_row("Leave History", "請假紀錄", bold=False, margin="xs"),
+                _stat_row("My Attendance", "/attendance", bold=False, margin="sm"),
+                _stat_row("Leave History", "/leaves", bold=False, margin="xs"),
                 _stat_row("Salary Inquiry", "/salary", bold=False, margin="xs"),
-                _stat_row("Work Schedule", "工作日曆", bold=False, margin="xs"),
-                _stat_row("Leave Request", "請假申請", bold=False, margin="xs"),
+                _stat_row("Work Schedule", "/schedule", bold=False, margin="xs"),
+                _stat_row("Leave Request", "/leaverequest", bold=False, margin="xs"),
                 _stat_row("Help Center", "/ticket", bold=False, margin="xs"),
                 _button("Open Rich Menu", "action=richmenu_attendance", margin="lg"),
             ],
@@ -867,12 +867,12 @@ def welcome_message() -> FlexMessage:
         contents=FlexContainer.from_dict(bubble),
         quick_reply=QuickReply(
             items=[
-                QuickReplyItem(action=PostbackAction(label="出勤紀錄", data="action=richmenu_attendance", display_text="出勤紀錄")),
-                QuickReplyItem(action=PostbackAction(label="請假紀錄", data="action=richmenu_leave_history", display_text="請假紀錄")),
-                QuickReplyItem(action=PostbackAction(label="薪資查詢", data="action=richmenu_salary", display_text="薪資查詢")),
-                QuickReplyItem(action=PostbackAction(label="工作日曆", data="action=richmenu_schedule", display_text="工作日曆")),
-                QuickReplyItem(action=PostbackAction(label="請假申請", data="action=richmenu_leave_request", display_text="請假申請")),
-                QuickReplyItem(action=PostbackAction(label="服務中心", data="action=richmenu_help", display_text="服務中心")),
+                QuickReplyItem(action=PostbackAction(label="My Attendance", data="action=richmenu_attendance", display_text="My Attendance")),
+                QuickReplyItem(action=PostbackAction(label="Leave History", data="action=richmenu_leave_history", display_text="Leave History")),
+                QuickReplyItem(action=PostbackAction(label="Salary Inquiry", data="action=richmenu_salary", display_text="Salary Inquiry")),
+                QuickReplyItem(action=PostbackAction(label="Work Schedule", data="action=richmenu_schedule", display_text="Work Schedule")),
+                QuickReplyItem(action=PostbackAction(label="Leave Request", data="action=richmenu_leave_request", display_text="Leave Request")),
+                QuickReplyItem(action=PostbackAction(label="Help Center", data="action=richmenu_help", display_text="Help Center")),
             ]
         ),
     )

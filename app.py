@@ -772,13 +772,13 @@ def handle_postback(event):
         return
 
     if action == "request_leave_type":
-        cat = data.get("category", ["請假"])[0]
+        cat = data.get("category", ["Leave"])[0]
         reply_to_line(
             event.reply_token,
             f"📝 Apply for {cat}:\n\n"
-            "Please send your leave details in this format:\n\n"
-            f"請假 YYYY-MM-DD {cat} <reason>\n\n"
-            f"Example: 請假 {_today_taipei().isoformat()} {cat} 身體不適\n\n"
+            "Please send your leave notice in this format:\n\n"
+            f"Leave YYYY-MM-DD {cat} <reason>\n\n"
+            f"Example: Leave {_today_taipei().isoformat()} {cat} Feeling unwell\n\n"
             "⚠️ Note: Submission will be flagged for administrator review and does not automatically imply approval.",
         )
         return

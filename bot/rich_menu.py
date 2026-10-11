@@ -24,7 +24,7 @@ from linebot.v3.messaging import (
 )
 
 RICH_MENU_NAME = "CSIE Student Portal"
-CHAT_BAR_TEXT = "Portal Menu · 選單"
+CHAT_BAR_TEXT = "Portal Menu"
 IMAGE_PATH = Path(__file__).resolve().parent.parent / "assets" / "rich_menu.png"
 
 
@@ -36,58 +36,58 @@ def build_rich_menu_request() -> RichMenuRequest:
         name=RICH_MENU_NAME,
         chat_bar_text=CHAT_BAR_TEXT,
         areas=[
-            # Row 1, Col 1: My Attendance (出勤紀錄)
+            # Row 1, Col 1: My Attendance
             RichMenuArea(
                 bounds=RichMenuBounds(x=0, y=0, width=833, height=530),
                 action=PostbackAction(
                     label="My Attendance",
                     data="action=richmenu_attendance",
-                    display_text="出勤紀錄",
+                    display_text="My Attendance",
                 ),
             ),
-            # Row 1, Col 2: Leave History (請假紀錄)
+            # Row 1, Col 2: Leave History
             RichMenuArea(
                 bounds=RichMenuBounds(x=833, y=0, width=834, height=530),
                 action=PostbackAction(
                     label="Leave History",
                     data="action=richmenu_leave_history",
-                    display_text="請假紀錄",
+                    display_text="Leave History",
                 ),
             ),
-            # Row 1, Col 3: Salary Inquiry (薪資查詢)
+            # Row 1, Col 3: Salary Inquiry
             RichMenuArea(
                 bounds=RichMenuBounds(x=1667, y=0, width=833, height=530),
                 action=PostbackAction(
                     label="Salary Inquiry",
                     data="action=richmenu_salary",
-                    display_text="薪資查詢",
+                    display_text="Salary Inquiry",
                 ),
             ),
-            # Row 2, Col 1: Work Schedule (工作日曆)
+            # Row 2, Col 1: Work Schedule
             RichMenuArea(
                 bounds=RichMenuBounds(x=0, y=530, width=833, height=416),
                 action=PostbackAction(
                     label="Work Schedule",
                     data="action=richmenu_schedule",
-                    display_text="工作日曆",
+                    display_text="Work Schedule",
                 ),
             ),
-            # Row 2, Col 2: Leave Request (請假申請)
+            # Row 2, Col 2: Leave Request
             RichMenuArea(
                 bounds=RichMenuBounds(x=833, y=530, width=834, height=416),
                 action=PostbackAction(
                     label="Leave Request",
                     data="action=richmenu_leave_request",
-                    display_text="請假申請",
+                    display_text="Leave Request",
                 ),
             ),
-            # Row 2, Col 3: Help Center (服務中心)
+            # Row 2, Col 3: Help Center
             RichMenuArea(
                 bounds=RichMenuBounds(x=1667, y=530, width=833, height=416),
                 action=PostbackAction(
                     label="Help Center",
                     data="action=richmenu_help",
-                    display_text="服務中心",
+                    display_text="Help Center",
                 ),
             ),
         ],

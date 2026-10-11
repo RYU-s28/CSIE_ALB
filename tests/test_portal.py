@@ -178,7 +178,7 @@ class TestFlexMessageBuilders(TestCase):
             "half_days": 0,
             "late_days": 0,
             "attendance_pct": 95,
-            "today_status": "出席 (正常出勤)",
+            "today_status": "Present (Scheduled Workday)",
         }
         msg = my_attendance_message(summary, month_label="October 2026")
         data = msg.contents.data
@@ -186,8 +186,8 @@ class TestFlexMessageBuilders(TestCase):
 
     def test_leave_history_message_design(self):
         records = [
-            {"type": "病假", "date": "2026-10-08", "status": "Recorded"},
-            {"type": "事假", "date": "2026-09-17", "status": "Recorded"},
+            {"type": "Sick Leave", "date": "2026-10-08", "status": "Recorded"},
+            {"type": "Personal Leave", "date": "2026-09-17", "status": "Recorded"},
         ]
         msg = leave_history_message(records, month_label="October 2026")
         data = msg.contents.data
@@ -195,8 +195,8 @@ class TestFlexMessageBuilders(TestCase):
 
     def test_work_schedule_message_design(self):
         days = [
-            {"date_str": "2026-10-14", "weekday_zh": "週三", "is_workday": True, "type": "Workday", "note": "8 hrs"},
-            {"date_str": "2026-10-15", "weekday_zh": "週四", "is_workday": True, "type": "Workday", "note": "8 hrs"},
+            {"date_str": "2026-10-14", "weekday_en": "Wed", "is_workday": True, "type": "Workday", "note": "8 hrs"},
+            {"date_str": "2026-10-15", "weekday_en": "Thu", "is_workday": True, "type": "Workday", "note": "8 hrs"},
         ]
         msg = work_schedule_message(days)
         data = msg.contents.data

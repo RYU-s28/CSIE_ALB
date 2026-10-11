@@ -69,7 +69,7 @@ def leave_confirmation_message(
         "Automatically classified. If anything is incorrect, request a correction "
         "from an administrator."
         if confirmed
-        else "Your absence notice was recorded as 待確認. Please contact an "
+        else "Your absence notice was recorded as Pending Review. Please contact an "
         "administrator to confirm the leave type."
     )
 
@@ -114,7 +114,7 @@ def leave_confirmation_message(
                     "contents": [
                         _detail("Student", student_name),
                         _detail("Date", leave_date),
-                        _detail("Leave category", f"{category} · {category_label}"),
+                        _detail("Leave category", category_label),
                         _detail("Record ID", record_id),
                     ],
                 },

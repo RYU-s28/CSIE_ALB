@@ -445,7 +445,9 @@ def handle_command(
             record = google_sheets.get_attendance_record(student_id, target_date)
             if record is None:
                 return f"No attendance record found for {target_date.isoformat()}."
-            return f"{target_date.isoformat()}: {record.get('type', '待確認')}"
+            raw_type = record.get("type", "Pending Review")
+            status_en = LEAVE_TYPE_LABELS.get(raw_type, raw_type)
+            return f"{target_date.isoformat()}: {status_en}"
         except ValueError:
             try:
                 target_month = date.fromisoformat(f"{args[0]}-01")
@@ -553,9 +555,11 @@ def handle_command(
             return "I couldn't withdraw the leave. Please contact an administrator."
         if deleted is None:
             return "No leave record found for that date."
+        raw_type = deleted.get("old_status", "Leave")
+        status_en = LEAVE_TYPE_LABELS.get(raw_type, raw_type)
         return (
             f"Your leave for {target_date.isoformat()} "
-            f"({deleted['old_status']}) was withdrawn."
+            f"({status_en}) was withdrawn."
         )
 
     if command == "ticket":

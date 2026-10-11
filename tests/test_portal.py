@@ -122,37 +122,37 @@ class TestRichMenuRequest(TestCase):
         req = build_rich_menu_request()
         self.assertEqual(req.name, "CSIE Student Portal")
         self.assertEqual(req.size.width, 2500)
-        self.assertEqual(req.size.height, 843)
+        self.assertEqual(req.size.height, 1686)
         self.assertEqual(len(req.areas), 6)
 
-        # Verify area 1 (My Attendance)
+        # Verify area 1 (My Attendance) - Row 1, Col 1
         a1 = req.areas[0]
-        self.assertEqual((a1.bounds.x, a1.bounds.y, a1.bounds.width, a1.bounds.height), (0, 0, 833, 421))
+        self.assertEqual((a1.bounds.x, a1.bounds.y, a1.bounds.width, a1.bounds.height), (0, 0, 833, 843))
         self.assertEqual(a1.action.data, "action=richmenu_attendance")
 
-        # Verify area 2 (Leave History)
+        # Verify area 2 (Leave History) - Row 1, Col 2
         a2 = req.areas[1]
-        self.assertEqual((a2.bounds.x, a2.bounds.y, a2.bounds.width, a2.bounds.height), (833, 0, 834, 421))
+        self.assertEqual((a2.bounds.x, a2.bounds.y, a2.bounds.width, a2.bounds.height), (833, 0, 834, 843))
         self.assertEqual(a2.action.data, "action=richmenu_leave_history")
 
-        # Verify area 3 (Salary Inquiry)
+        # Verify area 3 (Salary Inquiry) - Row 1, Col 3
         a3 = req.areas[2]
-        self.assertEqual((a3.bounds.x, a3.bounds.y, a3.bounds.width, a3.bounds.height), (1667, 0, 833, 421))
+        self.assertEqual((a3.bounds.x, a3.bounds.y, a3.bounds.width, a3.bounds.height), (1667, 0, 833, 843))
         self.assertEqual(a3.action.data, "action=richmenu_salary")
 
-        # Verify area 4 (Work Schedule)
+        # Verify area 4 (Work Schedule) - Row 2, Col 1
         a4 = req.areas[3]
-        self.assertEqual((a4.bounds.x, a4.bounds.y, a4.bounds.width, a4.bounds.height), (0, 421, 833, 422))
+        self.assertEqual((a4.bounds.x, a4.bounds.y, a4.bounds.width, a4.bounds.height), (0, 843, 833, 843))
         self.assertEqual(a4.action.data, "action=richmenu_schedule")
 
-        # Verify area 5 (Leave Request)
+        # Verify area 5 (Leave Request) - Row 2, Col 2
         a5 = req.areas[4]
-        self.assertEqual((a5.bounds.x, a5.bounds.y, a5.bounds.width, a5.bounds.height), (833, 421, 834, 422))
+        self.assertEqual((a5.bounds.x, a5.bounds.y, a5.bounds.width, a5.bounds.height), (833, 843, 834, 843))
         self.assertEqual(a5.action.data, "action=richmenu_leave_request")
 
-        # Verify area 6 (Help Center)
+        # Verify area 6 (Help Center) - Row 2, Col 3
         a6 = req.areas[5]
-        self.assertEqual((a6.bounds.x, a6.bounds.y, a6.bounds.width, a6.bounds.height), (1667, 421, 833, 422))
+        self.assertEqual((a6.bounds.x, a6.bounds.y, a6.bounds.width, a6.bounds.height), (1667, 843, 833, 843))
         self.assertEqual(a6.action.data, "action=richmenu_help")
 
 

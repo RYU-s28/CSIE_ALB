@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import urllib.request
 from pathlib import Path
@@ -23,18 +24,26 @@ from linebot.v3.messaging import (
     RichMenuSize,
 )
 
-RICH_MENU_NAME = "CSIE Student Portal"
+BASE_MENU_NAME = "CSIE Student Portal"
 CHAT_BAR_TEXT = "Portal Menu"
 IMAGE_DIR = Path(__file__).resolve().parent.parent / "assets"
 IMAGE_PATH = IMAGE_DIR / "rich_menu.jpg" if (IMAGE_DIR / "rich_menu.jpg").exists() else IMAGE_DIR / "rich_menu.png"
 
 
-def build_rich_menu_request() -> RichMenuRequest:
+def get_image_hash(path: Path) -> str:
+    """Compute an 8-character hash of the image content to detect asset updates."""
+    try:
+        return hashlib.md5(path.read_bytes()).hexdigest()[:8]
+    except Exception:
+        return "default"
+
+
+def build_rich_menu_request(name: str | None = None) -> RichMenuRequest:
     """Build the 6-tile RichMenuRequest matching the LINE large 6-tile template (2500x1686)."""
     return RichMenuRequest(
         size=RichMenuSize(width=2500, height=1686),
         selected=True,
-        name=RICH_MENU_NAME,
+        name=name or BASE_MENU_NAME,
         chat_bar_text=CHAT_BAR_TEXT,
         areas=[
             # Row 1, Col 1: My Attendance (833 x 843)
@@ -99,9 +108,10 @@ def setup_rich_menu(*, force: bool = False, target_image: Path | None = None) ->
     """Create, upload image for, and set default Rich Menu in LINE.
     
     Guarantees:
-    1. Avoids recreating the menu on every deployment if already active with matching spec.
-    2. When replacing, creates and uploads new menu first; links as default ONLY after success.
-    3. Cleans up obsolete rich menus only after successful replacement.
+    1. Detects image content changes via hash; auto-updates when asset changes.
+    2. Avoids recreating the menu on every deployment if already active with matching hash.
+    3. When replacing, creates and uploads new menu first; links as default ONLY after success.
+    4. Cleans up obsolete rich menus only after successful replacement.
     """
     token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
     if not token:
@@ -117,19 +127,22 @@ def setup_rich_menu(*, force: bool = False, target_image: Path | None = None) ->
         print(f"RICH MENU SETUP: Image file not found at {img_path}")
         return None
 
+    img_hash = get_image_hash(img_path)
+    target_menu_name = f"{BASE_MENU_NAME} ({img_hash})"
+
     configuration = Configuration(access_token=token)
     try:
         with ApiClient(configuration) as api_client:
             messaging_api = MessagingApi(api_client)
 
-            # Avoid recreating on every deployment: check for existing matching menu
+            # Avoid recreating on every deployment: check for existing menu with matching hash
             menu_list = None
             try:
                 menu_list = messaging_api.get_rich_menu_list()
                 current_active_menu = None
                 for menu in menu_list.richmenus:
                     if (
-                        menu.name == RICH_MENU_NAME
+                        menu.name == target_menu_name
                         and menu.size.width == 2500
                         and menu.size.height == 1686
                     ):
@@ -142,22 +155,22 @@ def setup_rich_menu(*, force: bool = False, target_image: Path | None = None) ->
                         def_res = messaging_api.get_default_rich_menu_id()
                         current_def_id = getattr(def_res, "rich_menu_id", str(def_res))
                         if current_def_id == current_active_menu.rich_menu_id:
-                            print(f"RICH MENU SETUP: Large menu {current_active_menu.rich_menu_id} is already default. Skipping recreation.")
+                            print(f"RICH MENU SETUP: Menu with hash {img_hash} is already active and default. Skipping recreation.")
                             return current_active_menu.rich_menu_id
                     except Exception:
                         pass
-                    # If exists with correct spec but not default, just set as default
+                    # If exists with matching hash but not default, set as default
                     messaging_api.set_default_rich_menu(current_active_menu.rich_menu_id)
-                    print(f"RICH MENU SETUP: Reusing existing large menu {current_active_menu.rich_menu_id} as default.")
+                    print(f"RICH MENU SETUP: Set menu with hash {img_hash} as default.")
                     return current_active_menu.rich_menu_id
             except Exception as error:
                 print("RICH MENU LOOKUP WARNING:", repr(error))
 
             # 1. Create a NEW Rich Menu first (preserving existing menu until replacement is ready)
-            rich_menu_req = build_rich_menu_request()
+            rich_menu_req = build_rich_menu_request(name=target_menu_name)
             response = messaging_api.create_rich_menu(rich_menu_request=rich_menu_req)
             new_rich_menu_id = response.rich_menu_id
-            print(f"RICH MENU CREATED: {new_rich_menu_id}")
+            print(f"RICH MENU CREATED: {new_rich_menu_id} ({target_menu_name})")
 
             # 2. Upload Image
             with open(img_path, "rb") as image_file:

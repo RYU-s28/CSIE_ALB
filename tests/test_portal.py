@@ -4,7 +4,7 @@ import sys
 from datetime import date
 from decimal import Decimal
 from unittest import TestCase
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # Stub external libraries if not installed in the testing environment
 for mod in ["dotenv", "gspread", "gspread.exceptions", "google", "google.oauth2", "google.oauth2.service_account"]:
@@ -91,6 +91,7 @@ from ui.leave_confirmation import (
     leave_confirmation_message,
     withdrawal_confirmation_message,
 )
+from database.google_sheets import get_student_attendance_summary
 
 
 class TestSalaryCalculation(TestCase):
@@ -172,17 +173,44 @@ class TestFlexMessageBuilders(TestCase):
 
     def test_my_attendance_message_design(self):
         summary = {
-            "scheduled_days": 20,
-            "attended_days": 19,
-            "absent_days": 1,
+            "scheduled_days": 23,
+            "completed_scheduled_workdays": 9,
+            "remaining_scheduled_workdays": 14,
+            "elapsed_workdays": 9,
+            "attended_days": 9,
+            "absent_days": 0,
             "half_days": 0,
             "late_days": 0,
-            "attendance_pct": 95,
-            "today_status": "Present (Scheduled Workday)",
+            "attendance_pct": 100,
+            "today_status": "Rest Day",
         }
         msg = my_attendance_message(summary, month_label="October 2026")
         data = msg.contents.data
         self.assertEqual(data["body"]["backgroundColor"], CARD_BG)
+        texts = [c.get("text") for c in data["body"]["contents"] if c.get("type") == "text"]
+        self.assertIn("My Attendance", texts)
+        self.assertIn("Attendance Rate (Month-to-Date)", texts)
+        self.assertIn("100%", texts)
+        self.assertIn("100%", msg.alt_text)
+
+    def test_my_attendance_message_na_design(self):
+        summary = {
+            "scheduled_days": 22,
+            "completed_scheduled_workdays": 0,
+            "remaining_scheduled_workdays": 22,
+            "elapsed_workdays": 0,
+            "attended_days": 0,
+            "absent_days": 0,
+            "half_days": 0,
+            "late_days": 0,
+            "attendance_pct": None,
+            "today_status": "Upcoming",
+        }
+        msg = my_attendance_message(summary, month_label="November 2026")
+        data = msg.contents.data
+        self.assertIn("N/A", msg.alt_text)
+        texts = [c.get("text") for c in data["body"]["contents"] if c.get("type") == "text"]
+        self.assertIn("N/A", texts)
 
     def test_leave_history_message_design(self):
         records = [
@@ -248,7 +276,79 @@ class TestCommandHandling(TestCase):
         self.assertEqual(normalize_command("plain text"), "")
 
     def test_natural_query_leaves(self):
-        from unittest.mock import patch
         with patch("database.google_sheets.get_student_leave_records", return_value=[]):
             res = try_handle_natural_portal_query("Show me all my sick leaves in September", "ST001")
             self.assertIsNotNone(res)
+
+
+class TestAttendanceCalculation(TestCase):
+    @patch("database.google_sheets.get_monthly_attendance_counts", return_value=(0, 0))
+    @patch("database.google_sheets.get_attendance_record", return_value=None)
+    @patch("database.google_sheets.get_attendance_rows", return_value=[])
+    @patch("database.google_sheets.datetime")
+    def test_mtd_october_12_all_attended(self, mock_dt, mock_rows, mock_rec, mock_counts):
+        # 2026-10-12 is Monday (rest day). Up to Oct 12, there are 9 completed workdays.
+        mock_now = MagicMock()
+        mock_now.date.return_value = date(2026, 10, 12)
+        mock_dt.now.return_value = mock_now
+
+        summary = get_student_attendance_summary("ST001", date(2026, 10, 1))
+
+        self.assertEqual(summary["completed_scheduled_workdays"], 9)
+        self.assertEqual(summary["remaining_scheduled_workdays"], 14)
+        self.assertEqual(summary["scheduled_days"], 23)
+        self.assertEqual(summary["attended_days"], 9)
+        self.assertEqual(summary["absent_days"], 0)
+        self.assertEqual(summary["attendance_pct"], 100)
+        self.assertEqual(summary["today_status"], "Rest Day")
+
+    @patch("database.google_sheets.get_monthly_attendance_counts", return_value=(0, 0))
+    @patch("database.google_sheets.get_attendance_record", return_value=None)
+    @patch("database.google_sheets.get_attendance_rows", return_value=[])
+    @patch("database.google_sheets.datetime")
+    def test_mtd_workday_in_progress_pending(self, mock_dt, mock_rows, mock_rec, mock_counts):
+        # 2026-10-14 is Wednesday (workday). No attendance record yet -> pending, excluded from completed
+        mock_now = MagicMock()
+        mock_now.date.return_value = date(2026, 10, 14)
+        mock_dt.now.return_value = mock_now
+
+        summary = get_student_attendance_summary("ST001", date(2026, 10, 1))
+
+        self.assertEqual(summary["completed_scheduled_workdays"], 9)
+        self.assertEqual(summary["remaining_scheduled_workdays"], 14)  # Oct 14 + 13 future days
+        self.assertEqual(summary["today_status"], "Pending")
+        self.assertEqual(summary["attendance_pct"], 100)
+
+    @patch("database.google_sheets.get_monthly_attendance_counts", return_value=(0, 0))
+    @patch("database.google_sheets.get_attendance_record", return_value=None)
+    @patch("database.google_sheets.datetime")
+    def test_mtd_half_days_and_absences(self, mock_dt, mock_rec, mock_counts):
+        # 2026-10-12, 1 sick leave, 1 half-day
+        mock_now = MagicMock()
+        mock_now.date.return_value = date(2026, 10, 12)
+        mock_dt.now.return_value = mock_now
+
+        with patch("database.google_sheets.get_attendance_rows", return_value=[
+            {"student_id": "ST001", "date": "2026-10-07", "type": "病假"},
+            {"student_id": "ST001", "date": "2026-10-08", "type": "半天"},
+        ]):
+            summary = get_student_attendance_summary("ST001", date(2026, 10, 1))
+
+        self.assertEqual(summary["completed_scheduled_workdays"], 9)
+        self.assertEqual(summary["absent_days"], 1)
+        self.assertEqual(summary["half_days"], 1)
+        self.assertEqual(summary["attended_days"], 7)
+        # effective_attended = 7 + 0.5 = 7.5. 7.5 / 9 * 100 = 83.33% -> 83%
+        self.assertEqual(summary["attendance_pct"], 83)
+
+    @patch("database.google_sheets.datetime")
+    def test_mtd_future_month_returns_na(self, mock_dt):
+        mock_now = MagicMock()
+        mock_now.date.return_value = date(2026, 10, 12)
+        mock_dt.now.return_value = mock_now
+
+        summary = get_student_attendance_summary("ST001", date(2026, 11, 1))
+
+        self.assertEqual(summary["completed_scheduled_workdays"], 0)
+        self.assertIsNone(summary["attendance_pct"])
+        self.assertEqual(summary["today_status"], "Upcoming")

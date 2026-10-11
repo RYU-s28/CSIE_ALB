@@ -58,6 +58,8 @@ def _stat_row(
     value_color: str = DARK_GREEN,
     bold: bool = True,
     margin: str = "sm",
+    label_flex: int = 4,
+    value_flex: int = 3,
 ) -> dict[str, object]:
     """Build a two-column key-value row."""
     return {
@@ -70,7 +72,7 @@ def _stat_row(
                 "text": label,
                 "size": "sm",
                 "color": LABEL_TEXT,
-                "flex": 4,
+                "flex": label_flex,
                 "wrap": True,
             },
             {
@@ -80,7 +82,7 @@ def _stat_row(
                 "color": value_color,
                 "weight": "bold" if bold else "regular",
                 "align": "end",
-                "flex": 3,
+                "flex": value_flex,
                 "wrap": True,
             },
         ],
@@ -300,9 +302,29 @@ def my_attendance_message(
     *,
     month_label: str,
 ) -> FlexMessage:
-    """Build the My Attendance card matching Image 3."""
-    pct = int(summary.get("attendance_pct", 100))
-    pct_str = f"{pct}%"
+    """Build the My Attendance card matching Image 3 with Month-to-Date calculation."""
+    pct = summary.get("attendance_pct")
+    if pct is None:
+        pct_str = "N/A"
+        bar_contents: list[dict[str, object]] = []
+    else:
+        pct_val = int(pct)
+        pct_str = f"{pct_val}%"
+        bar_width = max(5, min(100, pct_val))
+        bar_contents = [
+            {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": BUTTON_GREEN,
+                "width": f"{bar_width}%",
+                "height": "8px",
+                "cornerRadius": "30px",
+                "contents": [],
+            }
+        ]
+
+    absent_count = int(summary.get("absent_days", 0) or 0)
+    absent_color = DEDUCTION_RED if absent_count > 0 else DARK_GREEN
 
     bubble: dict[str, object] = {
         "type": "bubble",
@@ -322,19 +344,27 @@ def my_attendance_message(
                 },
                 {
                     "type": "text",
-                    "text": f"{month_label} · Sample figures",
+                    "text": month_label,
                     "size": "xs",
                     "color": MUTED_TEXT,
                     "margin": "xs",
                 },
-                # Percentage Display
+                # Attendance Rate Label & Percentage
+                {
+                    "type": "text",
+                    "text": "Attendance Rate (Month-to-Date)",
+                    "size": "xs",
+                    "color": MUTED_TEXT,
+                    "weight": "bold",
+                    "margin": "md",
+                },
                 {
                     "type": "text",
                     "text": pct_str,
                     "size": "3xl",
                     "weight": "bold",
                     "color": DARK_GREEN,
-                    "margin": "md",
+                    "margin": "xs",
                 },
                 # Progress Bar
                 {
@@ -344,24 +374,16 @@ def my_attendance_message(
                     "height": "8px",
                     "cornerRadius": "30px",
                     "margin": "sm",
-                    "contents": [
-                        {
-                            "type": "box",
-                            "layout": "vertical",
-                            "backgroundColor": BUTTON_GREEN,
-                            "width": f"{max(5, min(100, pct))}%",
-                            "height": "8px",
-                            "cornerRadius": "30px",
-                            "contents": [],
-                        }
-                    ],
+                    "contents": bar_contents,
                 },
                 # Stats rows
-                _stat_row("Days attended", str(summary.get("attended_days", 0)), margin="lg"),
-                _stat_row("Days absent", str(summary.get("absent_days", 0)), value_color=DEDUCTION_RED, margin="sm"),
-                _stat_row("Half-days", str(summary.get("half_days", 0)), margin="sm"),
-                _stat_row("Late arrivals", str(summary.get("late_days", 0)), margin="sm"),
-                _stat_row("Today's status", str(summary.get("today_status", "Present")), margin="sm"),
+                _stat_row("Attended days", str(summary.get("attended_days", 0)), margin="lg", label_flex=5, value_flex=2),
+                _stat_row("Absences", str(summary.get("absent_days", 0)), value_color=absent_color, margin="sm", label_flex=5, value_flex=2),
+                _stat_row("Half-days", str(summary.get("half_days", 0)), margin="sm", label_flex=5, value_flex=2),
+                _stat_row("Late arrivals", str(summary.get("late_days", 0)), margin="sm", label_flex=5, value_flex=2),
+                _stat_row("Completed scheduled workdays", str(summary.get("completed_scheduled_workdays", 0)), margin="sm", label_flex=5, value_flex=2),
+                _stat_row("Remaining scheduled workdays", str(summary.get("remaining_scheduled_workdays", 0)), margin="sm", label_flex=5, value_flex=2),
+                _stat_row("Today's status", str(summary.get("today_status", "Present")), margin="sm", label_flex=4, value_flex=3),
                 # Action button
                 _button(
                     "View Attendance History",

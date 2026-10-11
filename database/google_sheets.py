@@ -1457,68 +1457,47 @@ def get_student_attendance_summary(
     student_id: str,
     target_month: date,
 ) -> dict[str, object]:
-    """Compile monthly attendance statistics for a student."""
+    """Compile Month-to-Date (MTD) attendance statistics for a student.
+
+    Calculation Rules:
+    1. Retrieve current date using Asia/Taipei timezone.
+    2. Identify the first day of target_month.
+    3. Retrieve scheduled workdays from Work Calendar (excluding Mon/Tue unless overridden).
+    4. Only include elapsed scheduled workdays through today (exclude future scheduled workdays).
+    5. Don't count current workday as completed before its attendance status is finalized.
+    6. For previous months, calculate using all scheduled workdays in that month.
+    7. For future months, show N/A until attendance begins.
+    8. attendance_rate = (effective_attended / completed_scheduled_workdays) * 100
+       where effective_attended = attended_days + half_days * 0.5.
+    9. If there are no elapsed scheduled workdays, display N/A.
+    """
     from scheduler.work_calendar import is_workday
     from datetime import timedelta
 
-    year = target_month.year
-    month = target_month.month
-    if month == 12:
-        next_month = date(year + 1, 1, 1)
-    else:
-        next_month = date(year, month + 1, 1)
-
-    current_date = date(year, month, 1)
-    scheduled_days = 0
     today = datetime.now(ZoneInfo("Asia/Taipei")).date()
 
-    while current_date < next_month:
-        if is_workday(current_date):
-            scheduled_days += 1
-        current_date += timedelta(days=1)
-
-    full_days = 0
-    half_days = 0
-    try:
-        full_days, half_days = get_monthly_attendance_counts(student_id, target_month)
-    except Exception:
-        pass
-
-    all_rows = get_attendance_rows()
-    student_id_str = str(student_id).strip()
-    month_prefix = target_month.strftime("%Y-%m")
-
-    absent_days = 0
-    late_days = 0
-    half_day_rows = 0
-    for row in all_rows:
-        if str(row.get("student_id", "")).strip() != student_id_str:
-            continue
-        row_date = row.get("date", "")
-        if not row_date.startswith(month_prefix):
-            continue
-        row_type = row.get("type", "").strip()
-        if row_type == "遲到":
-            late_days += 1
-        elif row_type == "半天":
-            half_day_rows += 1
-        elif row_type not in {"出席", "不坐公交車"}:
-            absent_days += 1
-
-    if half_day_rows > half_days:
-        half_days = half_day_rows
-
-    if full_days > 0:
-        attended_days = full_days
+    target_year = target_month.year
+    target_m = target_month.month
+    month_start = date(target_year, target_m, 1)
+    if target_m == 12:
+        next_month_start = date(target_year + 1, 1, 1)
     else:
-        attended_days = max(0, scheduled_days - absent_days - int(half_days * 0.5))
+        next_month_start = date(target_year, target_m + 1, 1)
 
-    if scheduled_days > 0:
-        effective_attended = attended_days + half_days * 0.5
-        attendance_pct = min(100, max(0, round((effective_attended / scheduled_days) * 100)))
-    else:
-        attendance_pct = 100
+    is_past_month = (target_year < today.year) or (target_year == today.year and target_m < today.month)
+    is_current_month = (target_year == today.year and target_m == today.month)
+    is_future_month = (target_year > today.year) or (target_year == today.year and target_m > today.month)
 
+    # 1. Collect all scheduled workdays in target month
+    all_month_workdays: list[date] = []
+    curr = month_start
+    while curr < next_month_start:
+        if is_workday(curr):
+            all_month_workdays.append(curr)
+        curr += timedelta(days=1)
+    total_scheduled_workdays = len(all_month_workdays)
+
+    # 2. Today's attendance status & record
     status_translation = {
         "出席": "Present",
         "遲到": "Late",
@@ -1531,19 +1510,120 @@ def get_student_attendance_summary(
         "待確認": "Pending Review",
         "不坐公交車": "No Bus",
     }
-    today_record = get_attendance_record(student_id, today)
-    if today_record:
-        rec_type = today_record.get("type", "")
-        en_status = status_translation.get(rec_type, rec_type or "Present")
-        today_status = f"{en_status} (Recorded)"
-    else:
-        if is_workday(today):
-            today_status = "Present (Scheduled Workday)"
+    today_record = get_attendance_record(student_id, today) if is_current_month else None
+    today_is_workday = is_workday(today) if is_current_month else False
+
+    if is_current_month:
+        if today_record:
+            rec_type = today_record.get("type", "").strip()
+            en_status = status_translation.get(rec_type, rec_type or "Present")
+            today_status = en_status
+        elif today_is_workday:
+            today_status = "Pending"
         else:
-            today_status = "Off (Rest Day)"
+            today_status = "Rest Day"
+    elif is_past_month:
+        today_status = "Completed"
+    else:
+        today_status = "Upcoming"
+
+    # 3. Determine completed vs remaining scheduled workdays
+    if is_past_month:
+        completed_workdays_list = all_month_workdays
+        remaining_workdays_list = []
+    elif is_future_month:
+        completed_workdays_list = []
+        remaining_workdays_list = all_month_workdays
+    else:  # is_current_month
+        past_workdays = [d for d in all_month_workdays if d < today]
+        future_workdays = [d for d in all_month_workdays if d > today]
+
+        if today_is_workday:
+            # If today has a finalized attendance record, include it in completed days
+            if today_record is not None:
+                completed_workdays_list = past_workdays + [today]
+                remaining_workdays_list = future_workdays
+            else:
+                # Today is currently in progress / pending; exclude from completed denominator
+                completed_workdays_list = past_workdays
+                remaining_workdays_list = [today] + future_workdays
+        else:
+            # Today is a rest day (non-working day)
+            completed_workdays_list = past_workdays
+            remaining_workdays_list = future_workdays
+
+    completed_scheduled_workdays = len(completed_workdays_list)
+    remaining_scheduled_workdays = len(remaining_workdays_list)
+
+    if is_future_month or total_scheduled_workdays == 0:
+        return {
+            "scheduled_days": total_scheduled_workdays,
+            "completed_scheduled_workdays": 0,
+            "remaining_scheduled_workdays": total_scheduled_workdays,
+            "elapsed_workdays": 0,
+            "attended_days": 0,
+            "absent_days": 0,
+            "half_days": 0,
+            "late_days": 0,
+            "attendance_pct": None,
+            "today_status": today_status,
+            "month_label": target_month.strftime("%B %Y"),
+        }
+
+    # 4. Count absences, half-days, and late arrivals for the student
+    try:
+        all_rows = get_attendance_rows()
+    except Exception:
+        all_rows = []
+    student_id_str = str(student_id).strip()
+    month_prefix = target_month.strftime("%Y-%m")
+
+    absent_days = 0
+    late_days = 0
+    half_day_rows = 0
+    for row in all_rows:
+        if str(row.get("student_id", "")).strip() != student_id_str:
+            continue
+        row_date_str = str(row.get("date", "")).strip()
+        if not row_date_str.startswith(month_prefix):
+            continue
+        # In current month, ignore records dated in the future
+        if is_current_month and row_date_str > today.isoformat():
+            continue
+
+        row_type = str(row.get("type", "")).strip()
+        if row_type == "遲到":
+            late_days += 1
+        elif row_type == "半天":
+            half_day_rows += 1
+        elif row_type not in {"出席", "不坐公交車"}:
+            absent_days += 1
+
+    # 5. Full and half days from monthly report sheet if available
+    full_days = 0
+    monthly_half_days = 0
+    try:
+        full_days, monthly_half_days = get_monthly_attendance_counts(student_id, target_month)
+    except Exception:
+        pass
+
+    half_days = max(half_day_rows, monthly_half_days)
+
+    # 6. Attended days in absence-only model or from grid
+    if is_future_month or completed_scheduled_workdays == 0:
+        attended_days = 0
+        attendance_pct = None
+    else:
+        inferred_attended = max(0, completed_scheduled_workdays - absent_days - half_days)
+        attended_days = max(full_days, inferred_attended) if full_days > 0 else inferred_attended
+        effective_attended = attended_days + half_days * 0.5
+        attendance_pct = min(100, max(0, round((effective_attended / completed_scheduled_workdays) * 100)))
 
     return {
-        "scheduled_days": scheduled_days,
+        "scheduled_days": total_scheduled_workdays,
+        "completed_scheduled_workdays": completed_scheduled_workdays,
+        "remaining_scheduled_workdays": remaining_scheduled_workdays,
+        "elapsed_workdays": completed_scheduled_workdays,
         "attended_days": attended_days,
         "absent_days": absent_days,
         "half_days": half_days,

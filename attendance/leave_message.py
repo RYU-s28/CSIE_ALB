@@ -80,3 +80,32 @@ def parse_attendance_date(message: str, *, today: date | None = None) -> date:
     if "明天" in message or "明日" in message or "tomorrow" in text:
         return today + timedelta(days=1)
     return today
+
+
+def validate_leave_workday(target_date: date) -> None:
+    from scheduler.work_calendar import is_workday
+    if not is_workday(target_date):
+        raise ValueError(f"{target_date.isoformat()} is a rest day. Leave can only be filed on a scheduled workday.")
+
+
+LEAVE_TEMPLATE_CATEGORIES = {
+    "Sick Leave": "sick_leave", "Personal Leave": "personal_leave",
+    "Menstrual Leave": "menstrual_leave", "Annual Leave": "special_leave",
+    "Half Day": "half_day",
+}
+
+
+def parse_leave_template(message: str):
+    """Recognize the editable leave form without needing AI classification."""
+    from attendance.classifier import ClassificationResult
+    match = re.fullmatch(
+        r"Leave\s+(\d{4}-\d{2}-\d{2})\s+(Sick Leave|Personal Leave|Menstrual Leave|Annual Leave|Half Day)\s+Reason:\s*(.*)",
+        message.strip(), re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return None
+    reason = match.group(3).strip()
+    if not reason or reason.casefold() in {"[your reason]", "<reason>", "your reason", "[請填寫原因]"}:
+        raise ValueError("Please fill in your leave reason before sending the request.")
+    status = next(value for key, value in LEAVE_TEMPLATE_CATEGORIES.items() if key.casefold() == match.group(2).casefold())
+    return ClassificationResult(status=status, confidence=1.0, attendance_intent=True)

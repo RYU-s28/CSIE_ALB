@@ -150,3 +150,29 @@ taps preserve the original timestamp. Unmatched, duplicate-name, and conflicting
 accounts remain unlinked and need roster correction. The button also retries
 matching after a display name or roster correction. Existing `agree_terms`
 buttons use the same saved authorization flow.
+
+## Spam protection and editable leave drafts
+
+Message, follow, and postback events share a per-LINE-user rolling limit of
+2 accepted requests per second and 20 per minute. Excess requests stop before
+student lookup, AI classification, and writes. A slowdown notice is sent at most
+once every 10 seconds. Webhook event IDs are remembered for five minutes to
+prevent duplicate delivery processing. Limits are thread-safe and bounded in
+memory per bot process; they reset on restart and are not shared across replicas.
+
+Leave cannot be saved on a rest day, including administrator single-date edits.
+The work calendar's normal Wednesday–Sunday schedule and explicit workday/day-off
+overrides apply. Validation occurs before tracker updates and spreadsheet writes.
+
+Leave category buttons open LINE's keyboard with an editable draft, defaulting
+to today or the next workday. Replace `[your reason]` and optionally change the
+date, then send. Selecting a category does not submit a request. Completed drafts
+are parsed locally for all five categories, including annual and half-day leave.
+The form's date/category syntax stays in English when display labels are translated.
+Keyboard autofill requires LINE for iOS/Android 12.6.0 or later; the bot also sends
+manual typing instructions for unsupported clients.
+
+Identity fields on cards are preserved verbatim during AI translation, including
+LINE names for unmatched accounts. Embedded names are masked before translation.
+Roster matching ignores spaces around `/` (for example, `Name /nickname` matches
+`Name/nickname`) while retaining all name characters and duplicate-name checks.

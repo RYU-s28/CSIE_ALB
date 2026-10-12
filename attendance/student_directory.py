@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import re
+
 
 ACTIVE_VALUES = {"true", "1", "yes"}
 
 
 def normalize_display_name(name: object) -> str:
-    """Normalize spacing and Latin casing without removing meaningful text."""
+    """Normalize spaces, including around slashes, without changing names."""
 
-    return " ".join(str(name).split()).casefold()
+    normalized = " ".join(str(name).split()).casefold()
+    return re.sub(r"\s*/\s*", "/", normalized)
 
 
 def _is_active(student: dict[str, object]) -> bool:

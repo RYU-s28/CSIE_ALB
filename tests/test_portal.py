@@ -588,3 +588,177 @@ class TestAccountAuthorization(TestCase):
             with self.assertRaises(ValueError):
                 save_account_authorization("U1", "ST101")
             sheet.assert_not_called()
+
+
+class TestSpamProtection(TestCase):
+    def test_second_limit_and_boundary(self):
+        from bot.rate_limit import EventRateLimiter
+        limit = EventRateLimiter()
+        self.assertEqual(limit.check("U1", "e1", now=0), (True, False))
+        self.assertEqual(limit.check("U1", "e2", now=0.1), (True, False))
+        self.assertEqual(limit.check("U1", "e3", now=0.2), (False, True))
+        self.assertEqual(limit.check("U1", "e4", now=0.3), (False, False))
+        self.assertTrue(limit.check("U2", "e5", now=0.3)[0])
+        self.assertTrue(limit.check("U1", "e6", now=1)[0])
+
+    def test_minute_limit_and_recovery(self):
+        from bot.rate_limit import EventRateLimiter
+        limit = EventRateLimiter()
+        for i in range(20):
+            self.assertTrue(limit.check("U1", now=i * 2)[0])
+        self.assertFalse(limit.check("U1", now=40)[0])
+        self.assertTrue(limit.check("U1", now=60)[0])
+
+    def test_duplicate_event_does_not_consume_quota(self):
+        from bot.rate_limit import EventRateLimiter
+        limit = EventRateLimiter()
+        self.assertTrue(limit.check("U1", "event1", now=0)[0])
+        self.assertEqual(limit.check("U1", "event1", now=0.1), (False, False))
+        self.assertTrue(limit.check("U1", "event2", now=0.2)[0])
+
+    def test_parallel_requests_share_limit(self):
+        from bot.rate_limit import EventRateLimiter
+        from concurrent.futures import ThreadPoolExecutor
+        limit = EventRateLimiter()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda i: limit.check("U1", str(i), now=0), range(8)))
+        self.assertEqual(sum(allowed for allowed, _ in results), 2)
+        self.assertEqual(sum(notify for _, notify in results), 1)
+
+    def test_user_cache_is_bounded(self):
+        from bot.rate_limit import EventRateLimiter
+        limit = EventRateLimiter(max_users=2)
+        for i in range(3):
+            limit.check(str(i), now=i)
+        self.assertEqual(len(limit.users), 2)
+
+
+class TestLeaveWorkdaysAndAutofill(TestCase):
+    def test_rest_day_rejected_and_override_allowed(self):
+        from attendance.leave_message import validate_leave_workday
+        from scheduler.work_calendar import WORKDAY_OVERRIDES, DAY_OFF_OVERRIDES
+        rest_day = date(2026, 10, 12)
+        with self.assertRaisesRegex(ValueError, "rest day"):
+            validate_leave_workday(rest_day)
+        with patch("scheduler.work_calendar.WORKDAY_OVERRIDES", WORKDAY_OVERRIDES | {rest_day}):
+            validate_leave_workday(rest_day)
+        work_day = date(2026, 10, 14)
+        with patch("scheduler.work_calendar.DAY_OFF_OVERRIDES", DAY_OFF_OVERRIDES | {work_day}):
+            with self.assertRaises(ValueError):
+                validate_leave_workday(work_day)
+
+    def test_all_write_paths_reject_rest_day_before_sheet_access(self):
+        from database.google_sheets import append_attendance_row, upsert_attendance_record
+        with patch("database.google_sheets.ensure_attendance_sheet") as sheet, patch(
+            "database.google_sheets._attendance_header_layout"
+        ) as layout:
+            with self.assertRaisesRegex(ValueError, "rest day"):
+                append_attendance_row(["ST101", "Name", "2026-10-12", "病假", "Confirmed", "sick leave"])
+            with self.assertRaisesRegex(ValueError, "rest day"):
+                upsert_attendance_record("ST101", "Name", date(2026, 10, 12), "事假", "U1")
+            sheet.assert_not_called()
+            layout.assert_not_called()
+
+    def test_templates_open_keyboard_and_default_to_next_workday(self):
+        with patch("bot.line_ui.datetime") as clock:
+            clock.now.return_value.date.return_value = date(2026, 10, 12)
+            card = leave_request_menu_message()
+        buttons = [item for item in card.contents.data["body"]["contents"] if item.get("type") == "button"]
+        self.assertEqual(len(buttons), 5)
+        for button in buttons:
+            action = button["action"]
+            self.assertEqual(action["inputOption"], "openKeyboard")
+            self.assertIn("2026-10-14", action["fillInText"])
+            self.assertIn("[your reason]", action["fillInText"])
+            self.assertLessEqual(len(action["fillInText"]), 300)
+
+    def test_all_form_categories_parse_and_blank_reason_rejected(self):
+        from attendance.leave_message import LEAVE_TEMPLATE_CATEGORIES, parse_leave_template
+        for category, status in LEAVE_TEMPLATE_CATEGORIES.items():
+            result = parse_leave_template(f"Leave 2026-10-14 {category} Reason: Family appointment")
+            self.assertEqual(result.status, status)
+        for reason in ("", "[your reason]", "<reason>"):
+            with self.assertRaisesRegex(ValueError, "reason"):
+                parse_leave_template(f"Leave 2026-10-14 Sick Leave Reason: {reason}")
+        self.assertIsNone(parse_leave_template("Hello"))
+
+
+class TestInitializationGuidance(TestCase):
+    def test_no_redundant_open_rich_menu_buttons(self):
+        import json
+        from bot.line_ui import terms_agreement_confirmed_message
+        student = {"student_id": "ST101", "name": "Romel"}
+        for card in (welcome_message(student), initialization_message(student), initialization_message(), terms_agreement_confirmed_message(student)):
+            self.assertNotIn("Open Rich Menu", json.dumps(card.contents.data))
+
+    def test_name_mismatch_shows_exact_sheet_correction(self):
+        import json
+        card = initialization_message(display_name="Quidall/dharls", error_status="unmatched")
+        text = json.dumps(card.contents.data)
+        self.assertIn("LINE Display Name", text)
+        self.assertIn("Quidall/dharls", text)
+        self.assertIn("Name Not Matched", text)
+        self.assertNotIn("Pending Verification", text)
+        self.assertIn("does not approve a name mismatch", text)
+
+    def test_distinct_authorization_failures(self):
+        import json
+        for status, expected in (("ambiguous", "duplicate"), ("conflict", "different LINE account"), ("profile_unavailable", "retrieve your LINE profile")):
+            with self.subTest(status=status):
+                card = initialization_message(display_name="Name", error_status=status)
+                self.assertIn(expected, json.dumps(card.contents.data))
+
+
+class TestNamesRemainOriginal(TestCase):
+    def test_unmatched_card_never_translates_profile_name(self):
+        from bot.language import localize_message
+        profile_name = "奎姐兒/dharls"
+        card = initialization_message(display_name=profile_name, error_status="unmatched")
+        class FakeMessage:
+            def to_dict(self):
+                return {"type": "flex", "altText": card.alt_text, "contents": card.contents.data}
+        def translate(texts, language):
+            self.assertFalse(any(profile_name in text for text in texts))
+            return tuple(text.replace("Your LINE profile name", "您的 LINE 個人檔案名稱") for text in texts)
+        with patch("database.google_sheets.get_user_language", return_value="zh-TW"), patch(
+            "database.google_sheets.find_student_by_line_user_id", return_value=None
+        ), patch("bot.language.translate_texts", side_effect=translate), patch(
+            "linebot.v3.messaging.FlexMessage.from_dict", side_effect=lambda payload: payload, create=True
+        ):
+            result = localize_message(FakeMessage(), "U1")
+        import json
+        self.assertIn(profile_name, json.dumps(result, ensure_ascii=False))
+        self.assertNotIn("Quidall", json.dumps(result))
+
+    def test_english_unmatched_name_is_not_sent_to_ai(self):
+        from bot.language import localize_message
+        card = initialization_message(display_name="奎姐兒/dharls", error_status="unmatched")
+        class FakeMessage:
+            def to_dict(self):
+                return {"type": "flex", "altText": card.alt_text, "contents": card.contents.data}
+        message = FakeMessage()
+        # The Chinese name also appears in the English correction instructions;
+        # those embedded occurrences must be masked before reaching AI.
+        def translate(texts, language):
+            self.assertEqual(language, "en")
+            self.assertFalse(any("奎姐兒" in text for text in texts))
+            return texts
+        with patch("database.google_sheets.get_user_language", return_value="en"), patch(
+            "database.google_sheets.find_student_by_line_user_id", return_value=None
+        ), patch("bot.language.translate_texts", side_effect=translate), patch(
+            "linebot.v3.messaging.FlexMessage.from_dict", side_effect=lambda payload: payload, create=True
+        ):
+            result = localize_message(message, "U1")
+        import json
+        self.assertIn("奎姐兒/dharls", json.dumps(result, ensure_ascii=False))
+
+    def test_slash_spacing_matches_but_different_names_do_not(self):
+        from attendance.student_directory import find_students_by_display_name
+        students = [{"student_id": "ST101", "display_name": "奎姐兒 /dharls"}]
+        self.assertEqual(len(find_students_by_display_name(students, "奎姐兒/dharls")), 1)
+        self.assertEqual(find_students_by_display_name(students, "Different/dharls"), [])
+
+    def test_slash_normalization_keeps_duplicate_matches_ambiguous(self):
+        from attendance.student_directory import find_students_by_display_name
+        students = [{"student_id": "ST101", "display_name": "Name / nick"}, {"student_id": "ST102", "display_name": "Name/nick"}]
+        self.assertEqual(len(find_students_by_display_name(students, "Name/nick")), 2)

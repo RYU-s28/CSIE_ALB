@@ -37,6 +37,8 @@ from attendance.leave_message import (
 )
 from attendance.salary import calculate_salary
 from bot.language import localize_message, private_language_context
+from bot.rate_limit import rate_limited
+from attendance.leave_message import validate_leave_workday, parse_leave_template
 from bot.line_ui import language_settings_message
 from database.google_sheets import set_user_language, save_account_authorization
 
@@ -402,6 +404,7 @@ def resolve_student_from_event(event) -> dict[str, object] | None:
 
 
 @handler.add(FollowEvent)
+@rate_limited
 def handle_follow(event):
     """Handle new friend follow event with automatic initialization."""
     user_id = str(getattr(event.source, "user_id", None) or "").strip()
@@ -427,6 +430,7 @@ def handle_follow(event):
     MessageEvent,
     message=TextMessageContent,
 )
+@rate_limited
 @private_language_context
 def handle_message(event):
     text = event.message.text or ""
@@ -531,7 +535,15 @@ def handle_message(event):
         return
 
     try:
-        analysis = classify_attendance_message(text)
+        template_result = parse_leave_template(text)
+        if template_result:
+            from attendance.ai_classifier import AttendanceAnalysis
+            analysis = AttendanceAnalysis(intent="LEAVE", category=LEAVE_TYPE_LABELS[template_result.status], reasoning="Student submitted an edited leave template.")
+        else:
+            analysis = classify_attendance_message(text)
+    except ValueError as error:
+        reply_to_line(event.reply_token, str(error))
+        return
     except Exception as error:
         import traceback
 
@@ -628,8 +640,14 @@ def handle_message(event):
             return
 
         matched_by_line_user_id = True
-        attendance_date = parse_attendance_date(text)
-        classification = analysis.to_classification_result()
+        try:
+            attendance_date = parse_attendance_date(text)
+            if analysis.intent == "LEAVE":
+                validate_leave_workday(attendance_date)
+        except ValueError as error:
+            reply_to_line(event.reply_token, str(error))
+            return
+        classification = template_result or analysis.to_classification_result()
         record = tracker.add_from_message(
             student_id=student_work_id,
             message=text,
@@ -712,6 +730,7 @@ def handle_message(event):
 
 
 @handler.add(PostbackEvent)
+@rate_limited
 @private_language_context
 def handle_postback(event):
     """Route card actions after validating identity and the exact record."""
@@ -875,14 +894,11 @@ def handle_postback(event):
         return
 
     if action == "request_leave_type":
-        cat = data.get("category", ["Leave"])[0]
         reply_to_line(
             event.reply_token,
-            f"📝 Apply for {cat}:\n\n"
-            "Please send your leave notice in this format:\n\n"
-            f"Leave YYYY-MM-DD {cat} <reason>\n\n"
-            f"Example: Leave {_today_taipei().isoformat()} {cat} Feeling unwell\n\n"
-            "⚠️ Note: Submission will be flagged for administrator review and does not automatically imply approval.",
+            "Your leave draft is in the typing area. Edit its date and replace [your reason], then send. "
+            "Only scheduled workdays are accepted. If your LINE app doesn't show a draft, send: "
+            "Leave YYYY-MM-DD Sick Leave Reason: your reason",
         )
         return
 

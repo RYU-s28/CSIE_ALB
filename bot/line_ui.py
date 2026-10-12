@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from linebot.v3.messaging import (
     FlexContainer,
@@ -624,8 +626,25 @@ def work_schedule_message(
 # 5. Leave Request (請假申請)
 # ======================================================================
 
+def _leave_autofill_button(label: str, category: str, day) -> dict[str, object]:
+    return {
+        "type": "button", "style": "primary", "color": BUTTON_GREEN,
+        "height": "sm", "margin": "sm",
+        "action": {
+            "type": "postback", "label": label,
+            "data": f"action=request_leave_type&category={category}",
+            "inputOption": "openKeyboard",
+            "fillInText": f"Leave {day.isoformat()} {category} Reason: [your reason]",
+        },
+    }
+
+
 def leave_request_menu_message(student_name: str | None = None) -> FlexMessage:
-    """Build the Leave Request category selection card."""
+    """Build editable leave templates starting on the next scheduled workday."""
+    from scheduler.work_calendar import is_workday
+    template_day = datetime.now(ZoneInfo("Asia/Taipei")).date()
+    while not is_workday(template_day):
+        template_day += timedelta(days=1)
     bubble: dict[str, object] = {
         "type": "bubble",
         "size": "mega",
@@ -644,7 +663,7 @@ def leave_request_menu_message(student_name: str | None = None) -> FlexMessage:
                 },
                 {
                     "type": "text",
-                    "text": "Select leave category to request",
+                    "text": "Choose a category to fill your draft. Edit the date and reason, then send.",
                     "size": "xs",
                     "color": MUTED_TEXT,
                     "margin": "xs",
@@ -677,14 +696,14 @@ def leave_request_menu_message(student_name: str | None = None) -> FlexMessage:
                         },
                     ],
                 },
-                _button("🤒 Sick Leave", "action=request_leave_type&category=Sick Leave", margin="sm"),
-                _button("📋 Personal Leave", "action=request_leave_type&category=Personal Leave", margin="sm"),
-                _button("🌸 Menstrual Leave", "action=request_leave_type&category=Menstrual Leave", margin="sm"),
-                _button("🏖️ Annual Leave", "action=request_leave_type&category=Annual Leave", margin="sm"),
-                _button("⏱️ Half-day Leave", "action=request_leave_type&category=Half Day", margin="sm"),
+                _leave_autofill_button("🤒 Sick Leave", "Sick Leave", template_day),
+                _leave_autofill_button("📋 Personal Leave", "Personal Leave", template_day),
+                _leave_autofill_button("🌸 Menstrual Leave", "Menstrual Leave", template_day),
+                _leave_autofill_button("🏖️ Annual Leave", "Annual Leave", template_day),
+                _leave_autofill_button("⏱️ Half-day Leave", "Half Day", template_day),
                 {
                     "type": "text",
-                    "text": "Direct: Leave YYYY-MM-DD <Type> <Reason>",
+                    "text": "Leave YYYY-MM-DD <Type> Reason: <your reason>\nLeave can only be filed on scheduled workdays.",
                     "size": "xxs",
                     "color": MUTED_TEXT,
                     "align": "center",
@@ -928,7 +947,6 @@ def welcome_message(
                 _stat_row("Help Center", "/ticket", bold=False, margin="xs"),
                 _button("Language / 語言", "action=language_settings", margin="md"),
                 _button("Authorize & Connect Account", "action=authorize_account", margin="md"),
-                _button("Open Rich Menu", "action=richmenu_attendance", margin="lg"),
             ],
         },
     }
@@ -964,7 +982,31 @@ def initialization_message(
         student_id = str(student.get("student_id") or "").strip()
 
     is_recognized = bool(student_name and student_id)
-    badge_label = "Recognized" if is_recognized else "Unmatched"
+    failure_details = {
+        "ambiguous": (
+            "More than one active student record matches your LINE name.",
+            "Ask an administrator to correct the duplicate LINE Display Name entries, then tap Authorize & Connect Account again.",
+            "Duplicate Names",
+        ),
+        "conflict": (
+            "The matching student record is already linked to a different LINE account.",
+            "Ask an administrator to check the existing account link. Authorize cannot replace another person's account.",
+            "Account Conflict",
+        ),
+        "profile_unavailable": (
+            "We could not retrieve your LINE profile name.",
+            "Try again in a private chat. If this continues, contact an administrator.",
+            "Profile Unavailable",
+        ),
+    }
+    failure_reason, failure_steps, failure_label = failure_details.get(error_status, (
+        "Your LINE profile name does not match an active student record.",
+        f'Ask an administrator to set LINE Display Name in your Students row to "{display_name or "your current LINE profile name"}". '
+        "Alternatively, change your LINE profile name to match the sheet. Then tap Authorize & Connect Account again. "
+        "Authorization links a matching record; it does not approve a name mismatch.",
+        "Name Not Matched",
+    ))
+    badge_label = "Recognized" if is_recognized else failure_label if error_status in failure_details else "Unmatched"
     badge_bg = "#D7F2E9" if is_recognized else "#FCE8E6"
     badge_color = "#176B5B" if is_recognized else DEDUCTION_RED
 
@@ -1071,7 +1113,6 @@ def initialization_message(
             ],
         })
 
-        body_contents.append(_button("Open Rich Menu", "action=richmenu_attendance", color=DARK_GREEN, margin="xs"))
     else:
         body_contents.append({
             "type": "box",
@@ -1090,10 +1131,7 @@ def initialization_message(
                 },
                 {
                     "type": "text",
-                    "text": (
-                        "We could not automatically match your LINE display name with "
-                        "an active student record in our Students sheet."
-                    ),
+                    "text": failure_reason,
                     "size": "xs",
                     "color": MUTED_TEXT,
                     "wrap": True,
@@ -1101,14 +1139,11 @@ def initialization_message(
                 },
                 {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
                 _stat_row("LINE Name", display_name or "Unknown", margin="sm", label_flex=4, value_flex=4),
-                _stat_row("Status", "Pending Verification", margin="xs", value_color=DEDUCTION_RED, label_flex=4, value_flex=4),
+                _stat_row("Status", failure_label, margin="xs", value_color=DEDUCTION_RED, label_flex=4, value_flex=4),
                 {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
                 {
                     "type": "text",
-                    "text": (
-                        "Please update your LINE display name to match your registered name "
-                        "in the Students sheet, or contact an administrator to link your account."
-                    ),
+                    "text": failure_steps,
                     "size": "xxs",
                     "color": LABEL_TEXT,
                     "wrap": True,
@@ -1258,7 +1293,6 @@ def terms_agreement_confirmed_message(
                 _stat_row("Leave Request", "/leaverequest", bold=False, margin="xs"),
                 _stat_row("Help Center", "/ticket", bold=False, margin="xs"),
                 _button("Language / 語言", "action=language_settings", margin="md"),
-                _button("Open Rich Menu", "action=richmenu_attendance", margin="md"),
             ],
         },
     }

@@ -741,6 +741,9 @@ def upsert_attendance_record(
 ) -> dict[str, str]:
     """Create or replace one student/date record and audit the change."""
 
+    if status not in {"出席", "遲到", "不坐公交車"}:
+        from attendance.leave_message import validate_leave_workday
+        validate_leave_workday(target_date)
     sheet, rows, header_row, columns = _attendance_header_layout()
     previous = get_attendance_record(student_id, target_date)
     old_status = previous.get("type", "") if previous else ""
@@ -1052,6 +1055,9 @@ def append_attendance_row(values: list[object]) -> str | None:
     if len(values) not in {6, 7, 8}:
         raise ValueError("Attendance rows must contain six, seven, or eight values.")
     student_id, student_name, day, attendance_type, status, raw_message = values[:6]
+    if str(attendance_type) not in {"出席", "遲到", "不坐公交車"}:
+        from attendance.leave_message import validate_leave_workday
+        validate_leave_workday(date.fromisoformat(str(day)))
     attendance_intent = values[6] if len(values) >= 7 else False
     record_id = str(values[7]).strip() if len(values) == 8 else ""
     record_id = record_id or _new_attendance_record_id()

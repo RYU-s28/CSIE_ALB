@@ -20,6 +20,7 @@ STATUSES = {
     "menstrual": ("Menstrual Leave", "經痛"), "annual": ("Annual Leave · Paid", "特休"),
     "half": ("Half Day", "半天"), "late": ("Late", "遲到"),
     "absent": ("Absent", "不出來"), "pending": ("Pending Review", "待確認"),
+    "clear": ("Clear · Blank Record", ""),
 }
 
 
@@ -40,7 +41,8 @@ def card(title, contents, buttons=(), subtitle=None):
         "paddingAll": "16px", "contents": header + list(contents),
     }}
     if buttons:
-        bubble["footer"] = {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "paddingAll": "16px", "spacing": "sm", "contents": list(buttons)}
+        spaced_buttons = [{**button, "margin": "none" if index == 0 else "8px"} for index, button in enumerate(buttons)]
+        bubble["footer"] = {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "paddingAll": "16px", "contents": spaced_buttons}
     return FlexMessage(alt_text=f"CSIE Admin: {title}", contents=FlexContainer.from_dict(bubble))
 
 
@@ -200,10 +202,12 @@ def student_message(student, day, ticket_id=None):
     if day not in entries:
         return card("Choose a Workday", [_stat_row("Student Name", name, margin="md"), paragraph("This date is not scheduled. Choose the attendance date to continue.")], [date_button("admin_student", day, student=student["student_id"], ticket=ticket_id), _button("Back", cancel, margin="none")], subtitle=day.isoformat())
     current = entries[day] or ("Present" if day < today() else "Pending")
-    short_labels = {"present": "Present", "sick": "Sick Leave", "personal": "Personal", "menstrual": "Menstrual", "annual": "Annual · Paid", "half": "Half Day", "late": "Late", "absent": "Absent", "pending": "Pending"}
+    short_labels = {"present": "Present", "sick": "Sick Leave", "personal": "Personal", "menstrual": "Menstrual", "annual": "Annual · Paid", "half": "Half Day", "late": "Late", "absent": "Absent", "pending": "Pending", "clear": "Clear"}
     choices = []
     for key in STATUSES:
         button = _button(short_labels[key], action("admin_preview", student=student["student_id"], date=day, status=key, ticket=ticket_id), margin="none")
+        if key == "clear":
+            button["color"] = DEDUCTION_RED
         button["flex"] = 1
         button["adjustMode"] = "shrink-to-fit"
         choices.append(button)
@@ -212,14 +216,49 @@ def student_message(student, day, ticket_id=None):
         pair = choices[offset:offset + 2]
         if len(pair) == 1:
             pair.append({"type": "box", "layout": "vertical", "flex": 1, "contents": []})
-        grid.append({"type": "box", "layout": "horizontal", "spacing": "sm", "margin": "sm", "contents": pair})
+        pair[1] = {**pair[1], "margin": "8px"}
+        grid.append({"type": "box", "layout": "horizontal", "margin": "8px", "contents": pair})
     return card("Edit Attendance", [
         _stat_row("Student Name", name, margin="md"),
         _stat_row("Student ID", str(student["student_id"]), margin="xs"),
         _stat_row("Current Status", current, margin="xs"),
-        paragraph("Choose a status. Present clears leave; annual leave is paid. You'll preview before saving."),
+        paragraph("Present records attendance. Clear removes the saved record and blanks the report cell. Annual leave is paid. Preview before saving."),
         *grid,
     ], [date_button("admin_student", day, student=student["student_id"], ticket=ticket_id), _button("Back to Ticket" if ticket_id else "Find Another Student", cancel, margin="none")], subtitle=day.isoformat())
+
+
+def edit_shortcut(message, actor):
+    """Open editing directly for a unique name or ID; never guess an identity."""
+    from bot.commands import is_admin_user
+    if not is_admin_user(actor):
+        raise ValueError("Attendance editing is available to administrators only.")
+    clear_search(actor)
+    match = re.fullmatch(r"\s*/?edit(?:\s+(.*))?\s*", message, flags=re.IGNORECASE)
+    query = (match.group(1) or "").strip() if match else ""
+    if not query:
+        return card("Edit Attendance", [paragraph("Send Edit followed by a name or student ID. Optional date: Edit S06677 2026-10-14.")])
+    explicit_day = None
+    date_match = re.search(r"(?:^|\s)(\d{4}-\d{2}-\d{2})$", query)
+    if date_match:
+        explicit_day = date.fromisoformat(date_match[1])
+        query = query[:date_match.start()].strip()
+    query = query.strip('"\'')
+    if not query:
+        raise ValueError("Include a student name or ID after Edit.")
+    student = db.find_student_by_id(query)
+    if not student:
+        matches = db.search_active_students(search_query(query))
+        if len(matches) != 1:
+            return students_message(explicit_day or today(), query=query)
+        student = matches[0]
+    day = explicit_day or today()
+    if explicit_day is None:
+        entries = db.get_monthly_report_entries(str(student["student_id"]), day)
+        if day not in entries:
+            future_days = sorted(value for value in entries if value > day)
+            if future_days:
+                day = future_days[0]
+    return student_message(student, day)
 
 
 def _snapshot(student_id, day, ticket_id):
@@ -258,7 +297,7 @@ def verify_action(actor, data):
 def preview_message(actor, student, day, status_key, ticket_id):
     from attendance.leave_message import validate_leave_workday
     status = STATUSES[status_key][1]
-    if status not in {"出席", "遲到"}:
+    if status_key != "clear" and status not in {"出席", "遲到"}:
         validate_leave_workday(day)
     snapshot, previous = _snapshot(str(student["student_id"]), day, ticket_id)
     confirm = signed_action(actor, "admin_apply", student=student["student_id"], date=day, status=status_key, ticket=ticket_id, snapshot=snapshot)
@@ -345,6 +384,11 @@ def handle_postback(data, actor, params=None, notify=None):
         if snapshot != get("snapshot"):
             raise ValueError("Attendance changed since this preview. Refresh and confirm the current record.")
         status = STATUSES[status_key][1]
+        if status_key == "clear":
+            result = db.clear_student_attendance(str(student["student_id"]), day, actor)
+            if ticket_id:
+                save_ticket_note(ticket_id, f"Attendance cleared for {day}. Audit: {result['action_id'] or 'already blank'}.")
+            return card("Attendance Cleared", [_stat_row("Student ID", str(student["student_id"]), margin="md"), _stat_row("Date", day.isoformat(), margin="xs"), paragraph("Saved records were removed and the Monthly Report cell is blank.")], [_button("Back to Ticket", action("admin_ticket", ticket=ticket_id), margin="none")] if ticket_id else [_button("Edit This Student", action("admin_student", student=student["student_id"], date=day), margin="none")])
         if previous == status:
             return card("Already Up to Date", [paragraph("This status is already saved. No duplicate change was made.")], [_button("Back to Ticket", action("admin_ticket", ticket=ticket_id), margin="none")] if ticket_id else [_button("Back to Status", action("admin_attendance", date=day), margin="none")])
         result = db.upsert_attendance_record(str(student["student_id"]), str(student.get("chinese_name") or student["name"]), day, status, actor, raw_message="Admin Portal correction", audit_details=f"Admin Portal; ticket={ticket_id or 'manual'}")

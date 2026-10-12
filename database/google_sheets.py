@@ -873,6 +873,28 @@ def delete_attendance_record(
     return {"old_status": old_status, "action_id": action_id}
 
 
+def clear_student_attendance(student_id: str, target_date: date, actor_line_user_id: str):
+    """Clear all records for one student/date and its grid cell with one audit."""
+    entries = get_monthly_report_entries(student_id, target_date)
+    if target_date not in entries:
+        raise ValueError("Choose a scheduled date before clearing attendance.")
+    records = [row for row in get_attendance_rows(target_date) if str(row.get("student_id", "")).strip() == student_id]
+    previous = entries[target_date]
+    if not records and not previous:
+        return {"action_id": "", "old_status": ""}
+    sheet, _, _, _ = _attendance_header_layout()
+    action_id = _append_audit(actor_line_user_id, "CLEAR", student_id, target_date, previous, "", json.dumps({"records": records, "monthly_status": previous}, ensure_ascii=False))
+    try:
+        for record in sorted(records, key=lambda row: int(row["_row_number"]), reverse=True):
+            sheet.delete_rows(int(record["_row_number"]))
+        if not update_monthly_report_cell(student_id, target_date, ""):
+            raise RuntimeError("Saved records were cleared, but Monthly Report could not be blanked. Retry the clear before resolving the ticket.")
+    except Exception:
+        _mark_audit_action(action_id, "FAILED", "Attendance clear was incomplete; check the report and retry.")
+        raise
+    return {"action_id": action_id, "old_status": previous}
+
+
 def undo_last_attendance_action(actor_line_user_id: str) -> dict[str, str] | None:
     """Undo the actor's most recent un-undone attendance mutation."""
 
@@ -930,7 +952,19 @@ def undo_last_attendance_action(actor_line_user_id: str) -> dict[str, str] | Non
         old_status = row[old_col]
         new_status = row[new_col]
         action = row[action_col]
-        if old_status:
+        if action == "CLEAR":
+            details_col = headers["details"]
+            saved = json.loads(row[details_col])
+            for record in saved.get("records", []):
+                append_attendance_row([
+                    record["student_id"], record["name"], record["date"], record["type"],
+                    record.get("status", "Confirmed"), record.get("raw_message", ""),
+                    record.get("attendance_intent", ""), record.get("attendance_record_id", ""),
+                ])
+            if not update_monthly_report_cell(student_id, target_date, saved.get("monthly_status", "")):
+                raise RuntimeError("Undo could not restore Monthly Report. Check the sheet before retrying.")
+            _append_audit(actor_line_user_id, "UNDO", student_id, target_date, "", old_status, "Undo attendance clear")
+        elif old_status:
             student = find_student_by_id(student_id)
             if student is None:
                 raise RuntimeError(f"Cannot undo: student {student_id} is not in Students.")

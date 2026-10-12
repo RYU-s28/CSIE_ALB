@@ -312,3 +312,18 @@ LINE Flex cards do not support editable text inputs. Search opens LINE's typing
 area; a real input field inside an interactive page would require a separate
 LINE webview/LIFF app. Existing `/adminfind` and `/busfind` commands remain valid
 as desktop fallbacks when keyboard opening is unavailable.
+
+## Direct Edit shortcut and Clear
+
+Administrators can send `Edit S06677`, `Edit 杜榮瑪`, or `/edit <name-or-ID>`
+to open the attendance editor directly. IDs, Chinese names, full names, and
+LINE names are accepted. A unique partial match also opens directly; ambiguous
+names show matching choices. Append `YYYY-MM-DD` to edit a specific day. Without
+a date, the editor uses today or the next scheduled date in the monthly report
+when today is a rest day.
+
+The red **Clear** option sits below **Absent**. After the signed confirmation,
+it deletes every attendance record for that student and date and blanks the
+Monthly Report cell. This differs from **Present**, which explicitly records 出席.
+The clear action preserves the previous rows and grid value in the audit log
+for `/undo`. Other students and dates remain untouched.

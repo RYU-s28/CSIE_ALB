@@ -1657,3 +1657,101 @@ class TestSearchFirstAdminCards(TestCase):
             context = consume_search("Uadmin")
         self.assertEqual(context.day, day)
         self.assertFalse(context.bus)
+
+
+class TestDirectEditAndClear(TestCase):
+    def setUp(self):
+        env = patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin", "LINE_CHANNEL_SECRET": "secret"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.student = {"student_id": "S06677", "name": "杜榮瑪", "chinese_name": "杜榮瑪"}
+        self.day = date(2026, 10, 14)
+
+    def test_edit_name_or_id_opens_card_directly(self):
+        from bot.admin_portal import edit_shortcut
+        for command in ("Edit S06677", "edit 杜榮瑪", "/edit 杜榮瑪"):
+            with self.subTest(command=command), patch("database.google_sheets.find_student_by_id", return_value=self.student), patch(
+                "database.google_sheets.get_monthly_report_entries", return_value={self.day: "病假"}
+            ), patch("bot.admin_portal.today", return_value=self.day), patch("bot.admin_portal.students_message") as picker:
+                result = edit_shortcut(command, "Uadmin")
+                self.assertIn("Edit Attendance", result.alt_text)
+                picker.assert_not_called()
+
+    def test_edit_explicit_date_and_rest_day_default(self):
+        from bot.admin_portal import edit_shortcut
+        import json
+        later = date(2026, 10, 23)
+        with patch("database.google_sheets.find_student_by_id", return_value=self.student), patch(
+            "database.google_sheets.get_monthly_report_entries", return_value={self.day: "病假", later: ""}
+        ), patch("bot.admin_portal.today", return_value=date(2026, 10, 12)):
+            default = edit_shortcut("Edit S06677", "Uadmin")
+            explicit = edit_shortcut("Edit 杜榮瑪 2026-10-23", "Uadmin")
+        self.assertIn(self.day.isoformat(), json.dumps(default.contents.data))
+        self.assertIn(later.isoformat(), json.dumps(explicit.contents.data))
+
+    def test_ambiguous_names_show_matches_instead_of_picking_someone(self):
+        from bot.admin_portal import edit_shortcut
+        matches = [self.student, {"student_id": "OTHER", "name": "杜榮瑪"}]
+        with patch("database.google_sheets.find_student_by_id", return_value=None), patch("database.google_sheets.search_active_students", return_value=matches), patch("bot.admin_portal.student_message") as editor:
+            result = edit_shortcut("Edit 杜榮瑪", "Uadmin")
+        self.assertIn("Search Results", result.alt_text)
+        editor.assert_not_called()
+
+    def test_nonadmin_shortcut_does_not_read_students(self):
+        from bot.admin_portal import edit_shortcut
+        with patch("database.google_sheets.find_student_by_id") as read:
+            with self.assertRaisesRegex(ValueError, "administrators only"):
+                edit_shortcut("Edit S06677", "Ustudent")
+            read.assert_not_called()
+
+    def test_clear_is_red_and_directly_below_absent(self):
+        from bot.admin_portal import student_message
+        from bot.line_ui import DEDUCTION_RED
+        with patch("database.google_sheets.get_monthly_report_entries", return_value={self.day: "病假"}):
+            result = student_message(self.student, self.day)
+        grid = [row for row in result.contents.data["body"]["contents"] if row.get("layout") == "horizontal" and row["contents"][0].get("type") == "button"]
+        self.assertEqual(grid[3]["contents"][1]["action"]["label"], "Absent")
+        clear = grid[4]["contents"][1]
+        self.assertEqual(clear["action"]["label"], "Clear")
+        self.assertEqual(clear["color"], DEDUCTION_RED)
+        self.assertEqual(clear["margin"], "8px")
+
+    def test_clear_confirm_uses_clear_service_not_present_status(self):
+        from bot.admin_portal import preview_message, handle_postback
+        from urllib.parse import parse_qs
+        with patch("database.google_sheets.get_monthly_report_entries", return_value={self.day: "病假"}), patch("database.google_sheets.get_attendance_record", return_value=None), patch("database.google_sheets.find_student_by_id", return_value=self.student):
+            preview = preview_message("Uadmin", self.student, self.day, "clear", None)
+            data = parse_qs(preview.contents.data["footer"]["contents"][0]["action"]["data"])
+            with patch("database.google_sheets.clear_student_attendance", return_value={"action_id": "CLEAR1"}) as clear, patch("database.google_sheets.upsert_attendance_record") as present:
+                result = handle_postback(data, "Uadmin")
+            clear.assert_called_once_with("S06677", self.day, "Uadmin")
+            present.assert_not_called()
+            self.assertIn("Attendance Cleared", result.alt_text)
+
+    def test_clear_deletes_all_same_day_records_in_reverse_row_order(self):
+        from database.google_sheets import clear_student_attendance
+        sheet = MagicMock()
+        records = [{"student_id": "S06677", "_row_number": "10"}, {"student_id": "OTHER", "_row_number": "15"}, {"student_id": "S06677", "_row_number": "20"}]
+        with patch("database.google_sheets.get_monthly_report_entries", return_value={self.day: "病假"}), patch("database.google_sheets.get_attendance_rows", return_value=records), patch(
+            "database.google_sheets._attendance_header_layout", return_value=(sheet, [], 1, {})
+        ), patch("database.google_sheets._append_audit", return_value="CLEAR1") as audit, patch("database.google_sheets.update_monthly_report_cell", return_value=True) as grid:
+            result = clear_student_attendance("S06677", self.day, "Uadmin")
+        self.assertEqual([call.args[0] for call in sheet.delete_rows.call_args_list], [20, 10])
+        self.assertEqual(audit.call_args.args[1], "CLEAR")
+        grid.assert_called_once_with("S06677", self.day, "")
+        self.assertEqual(result["action_id"], "CLEAR1")
+
+    def test_undo_clear_restores_records_and_previous_grid_value(self):
+        from database.google_sheets import undo_last_attendance_action, AUDIT_HEADERS
+        import json
+        saved = {"records": [{"student_id": "S06677", "name": "杜榮瑪", "date": self.day.isoformat(), "type": "病假", "status": "Confirmed", "raw_message": "Original notice", "attendance_record_id": "REC1"}], "monthly_status": "病假"}
+        rows = [AUDIT_HEADERS, ["CLEAR1", "timestamp", "Uadmin", "CLEAR", "S06677", self.day.isoformat(), "病假", "", json.dumps(saved), "FALSE"]]
+        sheet = MagicMock()
+        sheet.get_all_values.side_effect = lambda: rows
+        def append_undo(*args):
+            rows.append(["UNDO1", "timestamp", "Uadmin", "UNDO", "S06677", self.day.isoformat(), "", "病假", "Undo", "FALSE"])
+        with patch("database.google_sheets._ensure_named_sheet", return_value=sheet), patch("database.google_sheets.append_attendance_row", return_value="REC1") as restore, patch("database.google_sheets.update_monthly_report_cell", return_value=True) as grid, patch("database.google_sheets._append_audit", side_effect=append_undo):
+            undo_last_attendance_action("Uadmin")
+        self.assertEqual(restore.call_args.args[0][3], "病假")
+        self.assertEqual(restore.call_args.args[0][-1], "REC1")
+        grid.assert_called_once_with("S06677", self.day, "病假")

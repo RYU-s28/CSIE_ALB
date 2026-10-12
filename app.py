@@ -512,6 +512,12 @@ def handle_message(event):
     except Exception as error:
         print("USER MENU SYNC ERROR:", type(error).__name__)
     requested_command = normalize_command(text)
+    if re.match(r"^\s*/?edit(?:\s|$)", text, flags=re.IGNORECASE):
+        try:
+            reply_to_line(event.reply_token, admin_portal.edit_shortcut(text, user_id))
+        except (ValueError, RuntimeError) as error:
+            reply_to_line(event.reply_token, str(error))
+        return
     if is_admin_user(user_id):
         if is_private_chat and text.strip() and not text.lstrip().startswith("/"):
             from bot.search_context import consume_search

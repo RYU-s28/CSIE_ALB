@@ -319,10 +319,13 @@ def _run_admin_command(tokens: list[str], actor: str) -> str:
         return "Usage: /ticket show <id> | /ticket close <id> | /ticket reopen <id>"
     if command == "setuprichmenu":
         from bot.rich_menu import setup_rich_menu
-        menu_id = setup_rich_menu(force=True)
-        if menu_id:
-            return f"Rich Menu successfully setup and set as default:\nID: {menu_id}"
-        return "Failed to setup Rich Menu. Check server logs."
+        student_menu = setup_rich_menu(force=True)
+        admin_menu = setup_rich_menu(force=True, admin=True)
+        if student_menu and admin_menu:
+            return "Student and admin rich menus refreshed. The admin menu has been relinked to configured administrators. Reopen the bot chat to see the new artwork."
+        completed = "Student menu updated." if student_menu else "Student menu failed."
+        completed += " Admin menu updated." if admin_menu else " Admin menu or linking failed."
+        return completed + " Check server logs for the image preparation or LINE API error."
     return (
         "Admin commands:\n/ping\n/report [date]\n/summary [date]\n"
         "/status <student> [date]\n/set <student> <status> [date]\n"

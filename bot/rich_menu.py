@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import json
 import os
 import urllib.request
 from pathlib import Path
@@ -27,15 +29,46 @@ from linebot.v3.messaging import (
 BASE_MENU_NAME = "CSIE Student Portal"
 CHAT_BAR_TEXT = "Portal Menu"
 IMAGE_DIR = Path(__file__).resolve().parent.parent / "assets"
-IMAGE_PATH = IMAGE_DIR / "rich_menu.jpg" if (IMAGE_DIR / "rich_menu.jpg").exists() else IMAGE_DIR / "rich_menu.png"
+IMAGE_PATH = IMAGE_DIR / "rich_menu.png" if (IMAGE_DIR / "rich_menu.png").exists() else IMAGE_DIR / "rich_menu.jpg"
 
 
 def get_image_hash(path: Path) -> str:
-    """Compute an 8-character hash of the image content to detect asset updates."""
-    try:
-        return hashlib.md5(path.read_bytes()).hexdigest()[:8]
-    except Exception:
-        return "default"
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:8]
+
+
+def prepare_menu_image(path: Path):
+    """Keep source artwork intact and prepare an upload under LINE's 1 MB cap."""
+    from PIL import Image
+    with Image.open(path) as original:
+        width, height = original.size
+        if not 800 <= width <= 2500 or height < 250 or width / height < 1.45:
+            raise ValueError(f"Invalid rich menu dimensions {width}×{height}; width must be 800–2500, height at least 250, and ratio at least 1.45.")
+        raw = path.read_bytes()
+        if len(raw) <= 1_000_000 and original.format in {"PNG", "JPEG"}:
+            return raw, "image/png" if original.format == "PNG" else "image/jpeg", width, height
+        canvas = Image.new("RGB", original.size, "white")
+        rgba = original.convert("RGBA")
+        canvas.paste(rgba, mask=rgba.getchannel("A"))
+        for quality in (90, 85, 80, 70, 60, 50):
+            output = io.BytesIO()
+            canvas.save(output, format="JPEG", quality=quality, optimize=True)
+            data = output.getvalue()
+            if len(data) <= 1_000_000:
+                return data, "image/jpeg", width, height
+        raise ValueError("The rich menu image could not be compressed below LINE's 1 MB limit.")
+
+
+def get_layout_hash(admin, width, height):
+    # Include action changes in menu identity, even when artwork is unchanged.
+    labels, actions = menu_actions(admin)
+    return hashlib.sha256(json.dumps([labels, actions, width, height, "Admin Portal" if admin else CHAT_BAR_TEXT]).encode()).hexdigest()[:8]
+
+
+def menu_actions(admin):
+    return (
+        ["My Attendance", "Leave History", "Salary Inquiry", "Time Out Report" if admin else "Work Schedule", "Attendance Status" if admin else "Leave Request", "Help Center"],
+        ["richmenu_attendance", "richmenu_leave_history", "richmenu_salary", "admin_timeout" if admin else "richmenu_schedule", "admin_attendance" if admin else "richmenu_leave_request", "admin_tickets" if admin else "richmenu_help"],
+    )
 
 
 ADMIN_MENU_NAME = "CSIE Admin Portal"
@@ -43,17 +76,16 @@ _ADMIN_MENU_ID = None
 _MENU_ROLE_CACHE = {}
 
 
-def build_rich_menu_request(name: str | None = None, *, admin: bool = False) -> RichMenuRequest:
-    labels = ["My Attendance", "Leave History", "Salary Inquiry", "Time Out Report" if admin else "Work Schedule", "Attendance Status" if admin else "Leave Request", "Help Center"]
-    actions = ["richmenu_attendance", "richmenu_leave_history", "richmenu_salary", "admin_timeout" if admin else "richmenu_schedule", "admin_attendance" if admin else "richmenu_leave_request", "admin_tickets" if admin else "richmenu_help"]
-    widths = [833, 834, 833]
-    positions = [0, 833, 1667]
+def build_rich_menu_request(name: str | None = None, *, admin: bool = False, width=2500, height=1686) -> RichMenuRequest:
+    labels, actions = menu_actions(admin)
+    x_positions = [round(width * index / 3) for index in range(4)]
+    y_positions = [0, height // 2, height]
     return RichMenuRequest(
-        size=RichMenuSize(width=2500, height=1686), selected=True,
+        size=RichMenuSize(width=width, height=height), selected=True,
         name=name or (ADMIN_MENU_NAME if admin else BASE_MENU_NAME),
         chat_bar_text="Admin Portal" if admin else CHAT_BAR_TEXT,
         areas=[RichMenuArea(
-            bounds=RichMenuBounds(x=positions[index % 3], y=(index // 3) * 843, width=widths[index % 3], height=843),
+            bounds=RichMenuBounds(x=x_positions[index % 3], y=y_positions[index // 3], width=x_positions[index % 3 + 1] - x_positions[index % 3], height=y_positions[index // 3 + 1] - y_positions[index // 3]),
             action=PostbackAction(label=label, data=f"action={actions[index]}", display_text=label),
         ) for index, label in enumerate(labels)],
     )
@@ -113,18 +145,23 @@ def setup_rich_menu(*, force: bool = False, target_image: Path | None = None, ad
         print("RICH MENU SETUP: LINE_CHANNEL_ACCESS_TOKEN is missing.")
         return None
 
-    img_path = target_image or (IMAGE_DIR / "admin_rich_menu.png" if admin else (
-        IMAGE_DIR / "rich_menu.jpg"
-        if (IMAGE_DIR / "rich_menu.jpg").exists()
-        else IMAGE_DIR / "rich_menu.png"
-    ))
+    base_asset = "admin_rich_menu" if admin else "rich_menu"
+    png_path = IMAGE_DIR / f"{base_asset}.png"
+    img_path = target_image or (png_path if png_path.exists() else IMAGE_DIR / f"{base_asset}.jpg")
     if not img_path.exists():
         print(f"RICH MENU SETUP: Image file not found at {img_path}")
         return None
 
-    img_hash = get_image_hash(img_path)
+    try:
+        image_data, content_type, width, height = prepare_menu_image(img_path)
+        img_hash = get_image_hash(img_path)
+        layout_hash = get_layout_hash(admin, width, height)
+    except Exception as error:
+        print("RICH MENU IMAGE PREPARATION ERROR:", str(error))
+        return None
     base_name = ADMIN_MENU_NAME if admin else BASE_MENU_NAME
-    target_menu_name = f"{base_name} ({img_hash})"
+    target_menu_name = f"{base_name} ({img_hash}-{layout_hash})"
+    print(f"RICH MENU PREPARED: {img_path.name}, {width}×{height}, {len(image_data)} bytes.")
 
     configuration = Configuration(access_token=token)
     try:
@@ -139,16 +176,17 @@ def setup_rich_menu(*, force: bool = False, target_image: Path | None = None, ad
                 for menu in menu_list.richmenus:
                     if (
                         menu.name == target_menu_name
-                        and menu.size.width == 2500
-                        and menu.size.height == 1686
+                        and menu.size.width == width
+                        and menu.size.height == height
                     ):
                         current_active_menu = menu
                         break
 
                 if current_active_menu and not force:
                     if admin:
-                        _link_administrator_menu(messaging_api, current_active_menu.rich_menu_id)
-                        return current_active_menu.rich_menu_id
+                        linked = _link_administrator_menu(messaging_api, current_active_menu.rich_menu_id)
+                        _MENU_ROLE_CACHE.clear()
+                        return current_active_menu.rich_menu_id if linked else None
                     # Check if already set as default
                     try:
                         def_res = messaging_api.get_default_rich_menu_id()
@@ -166,16 +204,12 @@ def setup_rich_menu(*, force: bool = False, target_image: Path | None = None, ad
                 print("RICH MENU LOOKUP WARNING:", repr(error))
 
             # 1. Create a NEW Rich Menu first (preserving existing menu until replacement is ready)
-            rich_menu_req = build_rich_menu_request(name=target_menu_name, admin=admin)
+            rich_menu_req = build_rich_menu_request(name=target_menu_name, admin=admin, width=width, height=height)
             response = messaging_api.create_rich_menu(rich_menu_request=rich_menu_req)
             new_rich_menu_id = response.rich_menu_id
             print(f"RICH MENU CREATED: {new_rich_menu_id} ({target_menu_name})")
 
-            # 2. Upload Image
-            with open(img_path, "rb") as image_file:
-                image_data = image_file.read()
-
-            content_type = "image/jpeg" if img_path.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
+            # 2. Upload the prepared, size-checked image.
             upload_url = f"https://api-data.line.me/v2/bot/richmenu/{new_rich_menu_id}/content"
             headers = {
                 "Authorization": f"Bearer {token}",
@@ -216,10 +250,13 @@ def setup_rich_menu(*, force: bool = False, target_image: Path | None = None, ad
                         except Exception:
                             pass
 
-            return new_rich_menu_id
+            _MENU_ROLE_CACHE.clear()
+            return new_rich_menu_id if linked else None
 
     except Exception as error:
-        print("RICH MENU SETUP ERROR:", repr(error))
+        status = getattr(error, "status", None)
+        body = str(getattr(error, "body", ""))[:500]
+        print("RICH MENU SETUP ERROR:", type(error).__name__, status, body)
         return None
 
 

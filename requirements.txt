@@ -11,3 +11,4 @@ APScheduler>=3.11,<4
 gspread
 google-auth
 google-genai
+Pillow>=10

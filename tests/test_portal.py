@@ -1148,8 +1148,8 @@ class TestAdminRichMenu(TestCase):
         import bot.rich_menu as menus
         from types import SimpleNamespace
         api = MagicMock()
-        api.get_rich_menu_list.return_value.richmenus = [SimpleNamespace(name="CSIE Admin Portal (hash)", size=SimpleNamespace(width=2500, height=1686), rich_menu_id="ADMIN_MENU")]
-        with patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin"}), patch.object(menus, "get_image_hash", return_value="hash"), patch.object(menus, "ApiClient"), patch.object(menus, "MessagingApi", return_value=api), patch.object(menus, "_ADMIN_MENU_ID", None):
+        api.get_rich_menu_list.return_value.richmenus = [SimpleNamespace(name="CSIE Admin Portal (hash-layout)", size=SimpleNamespace(width=2500, height=1686), rich_menu_id="ADMIN_MENU")]
+        with patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin"}), patch.object(menus, "get_image_hash", return_value="hash"), patch.object(menus, "get_layout_hash", return_value="layout"), patch.object(menus, "prepare_menu_image", return_value=(b"image", "image/png", 2500, 1686)), patch.object(menus, "ApiClient"), patch.object(menus, "MessagingApi", return_value=api), patch.object(menus, "_ADMIN_MENU_ID", None):
             self.assertEqual(menus.setup_rich_menu(admin=True), "ADMIN_MENU")
             api.link_rich_menu_id_to_user.assert_called_once_with("Uadmin", "ADMIN_MENU")
             api.set_default_rich_menu.assert_not_called()
@@ -1465,3 +1465,55 @@ class TestTimeOutEligibility(TestCase):
             with self.assertRaisesRegex(ValueError, "administrators only"):
                 handle_postback({"action": ["admin_timeout"]}, "Ustudent")
             read.assert_not_called()
+
+
+class TestRichMenuImageSync(TestCase):
+    def test_source_images_fit_upload_limit_without_modifying_artwork(self):
+        from bot.rich_menu import prepare_menu_image, IMAGE_DIR
+        from pathlib import Path
+        from PIL import Image
+        import io
+        for name in ("rich_menu.png", "admin_rich_menu.png"):
+            with self.subTest(name=name):
+                path = IMAGE_DIR / name
+                original = path.read_bytes()
+                data, content_type, width, height = prepare_menu_image(path)
+                self.assertLessEqual(len(data), 1_000_000)
+                self.assertIn(content_type, {"image/jpeg", "image/png"})
+                with Image.open(io.BytesIO(data)) as uploaded:
+                    self.assertEqual(uploaded.size, (width, height))
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_hit_areas_cover_replacement_image_dimensions(self):
+        menu = build_rich_menu_request(width=2048, height=1381, admin=True)
+        self.assertEqual(menu.size.width, 2048)
+        self.assertEqual(menu.size.height, 1381)
+        for row in range(2):
+            tiles = menu.areas[row * 3:(row + 1) * 3]
+            self.assertEqual(sum(tile.bounds.width for tile in tiles), 2048)
+            self.assertEqual(tiles[0].bounds.x, 0)
+            self.assertEqual(tiles[-1].bounds.x + tiles[-1].bounds.width, 2048)
+        self.assertEqual(menu.areas[-1].bounds.y + menu.areas[-1].bounds.height, 1381)
+
+    def test_button_definition_changes_trigger_menu_recreation(self):
+        import bot.rich_menu as menus
+        old = menus.get_layout_hash(True, 2048, 1381)
+        labels, actions = menus.menu_actions(True)
+        actions[3] = "changed_route"
+        with patch.object(menus, "menu_actions", return_value=(labels, actions)):
+            self.assertNotEqual(menus.get_layout_hash(True, 2048, 1381), old)
+
+    def test_refresh_command_refreshes_both_roles(self):
+        from bot.commands import _run_admin_command
+        with patch("bot.rich_menu.setup_rich_menu", side_effect=["STUDENT", "ADMIN"]) as refresh:
+            result = _run_admin_command(["setuprichmenu"], "Uadmin")
+        self.assertEqual(refresh.call_count, 2)
+        self.assertEqual(refresh.call_args_list[0].kwargs, {"force": True})
+        self.assertEqual(refresh.call_args_list[1].kwargs, {"force": True, "admin": True})
+        self.assertIn("Student and admin", result)
+
+    def test_invalid_image_is_rejected_before_line_api_call(self):
+        import bot.rich_menu as menus
+        with patch.object(menus, "prepare_menu_image", side_effect=ValueError("Invalid image")), patch.object(menus, "MessagingApi") as api:
+            self.assertIsNone(menus.setup_rich_menu())
+            api.assert_not_called()

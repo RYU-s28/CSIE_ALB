@@ -72,7 +72,7 @@ in the `Audit Log` worksheet.
 
 ### CSIE Student Portal Rich Menu
 
-The bot includes a 6-tile persistent Rich Menu configured in `bot/rich_menu.py` with asset `assets/rich_menu.png` (2500x946 px), matching the sage green portal design:
+The bot includes a 6-tile persistent Rich Menu configured in `bot/rich_menu.py` with asset `assets/rich_menu.png`, matching the sage green portal design:
 1. **My Attendance (出勤紀錄)**: Displays scheduled days, attended days, absences, half-days, late arrivals, today's status, and an attendance percentage progress bar (`/attendance`, `/statusme`).
 2. **Leave History (請假紀錄)**: Lists past leave records with dates, categories, and approval status, with natural language query support (e.g. "Show me all my sick leaves in September", `/leaves [month] [category]`) and a button to request corrections.
 3. **Salary Inquiry (薪資查詢)**: Shows take-home pay, gross earnings, itemized deductions, worked hours, and an itemized breakdown with overtime calculation (`/salary [YYYY-MM] [overtime_hours]`). Marked as estimates unless actual payroll data is imported.
@@ -80,7 +80,7 @@ The bot includes a 6-tile persistent Rich Menu configured in `bot/rich_menu.py` 
 5. **Leave Request (請假申請)**: Guided menu for submitting sick, personal, menstrual, annual, and half-day leave notices with explicit notice that submission is flagged for admin review and does not automatically imply HR approval (`/leaverequest`).
 6. **Help Center (服務中心)**: Service ticket system for attendance correction, missing records, salary inquiries, and general questions, displaying ticket statuses and administrator responses (`/ticket`, `/helpcenter`).
 
-In a LINE chat, `/hello` and `/help` show the CSIE Student Portal card matching the same design with quick actions for all features. Administrators can run `/setuprichmenu` to recreate or refresh the default Rich Menu in LINE.
+In a LINE chat, `/hello` and `/help` show the CSIE Student Portal card matching the same design with quick actions for all features. Administrators can run `/setuprichmenu` to refresh both the student default menu and the per-user admin menu in LINE.
 
 After a leave record is successfully written, the bot sends a Flex confirmation
 card with the saved category, date, and stable attendance record ID. Existing
@@ -277,3 +277,17 @@ and timestamp in `Time Out Reports`; partial returns do not mark everyone home.
 Confirmations are signed, expire after ten minutes, and are invalidated if the
 bus selection or saved report changes. Reports remain private so the admin can
 copy the plain text into the group when ready.
+
+## Refreshing edited rich menu artwork
+
+Edit `assets/rich_menu.png` and `assets/admin_rich_menu.png`, deploy those files
+and the updated code, then run `/setuprichmenu` as an administrator in LINE.
+This refreshes both roles and relinks the admin menu. Menus also sync at app
+startup. Editing local files alone does not update LINE's uploaded images.
+
+The uploader derives the menu size and all six tap areas from each image.
+Pillow prepares an upload under LINE's 1 MB limit without changing your source
+PNG. PNG is preferred when both PNG and JPEG assets exist. Menu cache identity
+includes the image content and button definitions, so changes to labels or
+actions also trigger a refresh. Image preparation and LINE API failures are
+reported in server logs; `/setuprichmenu` reports which role failed.

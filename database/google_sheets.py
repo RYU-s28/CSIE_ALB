@@ -73,6 +73,8 @@ TICKET_HEADERS = [
 ]
 
 spreadsheet = None
+logs_spreadsheet = None
+LOG_WORKSHEET_NAMES = {"Attendance", "Logs", "Audit Log", "Tickets", "User Settings"}
 students_sheet = None
 attendance_sheet = None
 logs_sheet = None
@@ -92,13 +94,13 @@ class LineRegistrationConflictError(Exception):
         )
 
 
-def connect_google_sheets():
+def connect_google_sheets(id_variable="GOOGLE_SHEET_ID"):
     service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-    spreadsheet_id = os.getenv("GOOGLE_SHEET_ID")
+    spreadsheet_id = os.getenv(id_variable)
 
     if not service_account_json or not spreadsheet_id:
         raise RuntimeError(
-            "GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SHEET_ID are required."
+            f"GOOGLE_SERVICE_ACCOUNT_JSON and {id_variable} are required."
         )
 
     service_account_info = json.loads(service_account_json)
@@ -113,26 +115,32 @@ def connect_google_sheets():
 def ensure_sheet_state():
     """Create the workbook handles only when the Google Sheets config exists."""
 
-    global spreadsheet, students_sheet, attendance_sheet, logs_sheet
+    global spreadsheet, logs_spreadsheet, students_sheet, attendance_sheet, logs_sheet
 
     if spreadsheet is not None:
         return spreadsheet
 
     try:
-        spreadsheet = connect_google_sheets()
+        main_workbook = connect_google_sheets()
+        log_workbook = (
+            connect_google_sheets("GOOGLE_SHEET_LOGS_ID")
+            if os.getenv("GOOGLE_SHEET_LOGS_ID") else main_workbook
+        )
     except Exception as error:
         print("GOOGLE SHEETS INIT ERROR:", repr(error))
         return None
 
+    spreadsheet = main_workbook
+    logs_spreadsheet = log_workbook
     students_sheet = spreadsheet.worksheet("Students")
 
     try:
-        attendance_sheet = spreadsheet.worksheet("Attendance")
+        attendance_sheet = logs_spreadsheet.worksheet("Attendance")
     except WorksheetNotFound:
         attendance_sheet = None
 
     try:
-        logs_sheet = spreadsheet.worksheet("Logs")
+        logs_sheet = logs_spreadsheet.worksheet("Logs")
     except WorksheetNotFound:
         logs_sheet = None
 
@@ -163,7 +171,7 @@ def ensure_sheet_state():
             value_input_option="RAW",
         )
     else:
-        attendance_sheet = spreadsheet.add_worksheet(
+        attendance_sheet = logs_spreadsheet.add_worksheet(
             title="Attendance",
             rows=1000,
             cols=len(ATTENDANCE_HEADERS),
@@ -457,10 +465,11 @@ def ensure_attendance_sheet():
 def _ensure_named_sheet(name: str, headers: list[str]):
     if ensure_sheet_state() is None:
         return None
+    workbook = logs_spreadsheet if name in LOG_WORKSHEET_NAMES else spreadsheet
     try:
-        sheet = spreadsheet.worksheet(name)
+        sheet = workbook.worksheet(name)
     except WorksheetNotFound:
-        sheet = spreadsheet.add_worksheet(title=name, rows=1000, cols=len(headers))
+        sheet = workbook.add_worksheet(title=name, rows=1000, cols=len(headers))
     if not any(str(value).strip() for value in sheet.row_values(1)):
         sheet.append_row(headers, value_input_option="RAW")
     return sheet

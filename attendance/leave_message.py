@@ -79,6 +79,36 @@ def parse_attendance_date(message: str, *, today: date | None = None) -> date:
         return today + timedelta(days=2)
     if "明天" in message or "明日" in message or "tomorrow" in text:
         return today + timedelta(days=1)
+
+    weekdays = {
+        "monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1,
+        "wednesday": 2, "wed": 2, "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
+        "friday": 4, "fri": 4, "saturday": 5, "sat": 5, "sunday": 6, "sun": 6,
+    }
+    weekday = re.search(
+        r"\b(?:(?P<when>next|this|coming|last)\s+)?"
+        r"(?P<day>" + "|".join(sorted(weekdays, key=len, reverse=True)) + r")\b", text,
+    )
+    chinese_weekday = re.search(r"(?P<when>下|上)?(?:星期|禮拜|礼拜|週|周)(?P<day>[一二三四五六日天])", text)
+    if weekday or chinese_weekday:
+        if weekday:
+            target_weekday = weekdays[weekday.group("day")]
+            qualifier = weekday.group("when")
+        else:
+            target_weekday = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}[chinese_weekday.group("day")]
+            qualifier = chinese_weekday.group("when")
+        if re.search(r"\bnext week\b", text) or qualifier == "下":
+            return today + timedelta(days=7 - today.weekday() + target_weekday)
+        if re.search(r"\blast week\b", text) or qualifier == "上":
+            return today + timedelta(days=target_weekday - today.weekday() - 7)
+        if re.search(r"\bthis week\b", text) or qualifier == "this":
+            return today + timedelta(days=target_weekday - today.weekday())
+        if qualifier == "last":
+            return today - timedelta(days=(today.weekday() - target_weekday) % 7 or 7)
+        offset = (target_weekday - today.weekday()) % 7
+        if qualifier == "next" and offset == 0:
+            offset = 7
+        return today + timedelta(days=offset)
     return today
 
 

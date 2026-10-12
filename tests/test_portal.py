@@ -1770,3 +1770,105 @@ class TestDirectEditAndClear(TestCase):
         self.assertEqual(restore.call_args.args[0][3], "病假")
         self.assertEqual(restore.call_args.args[0][-1], "REC1")
         grid.assert_called_once_with("S06677", self.day, "病假")
+
+
+class TestNaturalWeekdayLeave(TestCase):
+    MESSAGE = "Good morning, due to personal reasons I won't be able to make it to work on Wednesday."
+
+    def test_exact_screenshot_message_is_personal_leave_on_wednesday(self):
+        from attendance.ai_classifier import classify_attendance_message
+        from attendance.leave_message import parse_attendance_date, validate_leave_workday
+        with patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
+            analysis = classify_attendance_message(self.MESSAGE)
+        self.assertEqual(analysis.intent, "LEAVE")
+        self.assertEqual(analysis.category, "事假")
+        self.assertEqual(analysis.to_classification_result().status, "personal_leave")
+        selected = parse_attendance_date(self.MESSAGE, today=date(2026, 10, 12))
+        self.assertEqual(selected, date(2026, 10, 14))
+        validate_leave_workday(selected)
+
+    def test_greetings_do_not_turn_full_leave_into_half_day(self):
+        from attendance.ai_classifier import classify_attendance_message
+        with patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
+            for greeting in ("Good morning", "Good afternoon", "Hello, good morning everyone"):
+                message = f"{greeting}, due to personal reasons I won't be able to make it to work on Wednesday."
+                with self.subTest(greeting=greeting):
+                    self.assertEqual(classify_attendance_message(message).category, "事假")
+            partial = "Good morning, I am requesting personal leave for Wednesday afternoon."
+            self.assertEqual(classify_attendance_message(partial).category, "半天")
+
+    def test_curly_apostrophe_and_common_absence_phrases(self):
+        from attendance.ai_classifier import classify_attendance_message
+        with patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
+            for phrase in ("won’t be able to make it to work", "cannot come to work", "will not be able to attend work", "am unable to go to work"):
+                message = f"Due to personal reasons I {phrase} on Wednesday."
+                with self.subTest(phrase=phrase):
+                    self.assertEqual(classify_attendance_message(message).category, "事假")
+
+    def test_weekdays_relative_to_posted_day_and_month_boundary(self):
+        from attendance.leave_message import parse_attendance_date
+        for message, today, expected in (
+            ("leave on Wednesday", date(2026, 10, 12), date(2026, 10, 14)),
+            ("leave on Wednesday", date(2026, 10, 14), date(2026, 10, 14)),
+            ("leave next Wednesday", date(2026, 10, 14), date(2026, 10, 21)),
+            ("leave on Wednesday next week", date(2026, 10, 12), date(2026, 10, 21)),
+            ("leave Wed", date(2026, 10, 30), date(2026, 11, 4)),
+            ("星期三請假", date(2026, 10, 12), date(2026, 10, 14)),
+            ("下週三請假", date(2026, 10, 12), date(2026, 10, 21)),
+            ("leave on 2026-10-23, Wednesday", date(2026, 10, 12), date(2026, 10, 23)),
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(parse_attendance_date(message, today=today), expected)
+
+    def test_personal_reasons_without_absence_is_not_a_leave_record(self):
+        from attendance.classifier import classify_status
+        for message in ("Good morning everyone", "We are discussing personal reasons", "I am not taking personal leave on Wednesday"):
+            result = classify_status(message)
+            self.assertFalse(result.attendance_intent)
+
+
+class SeparateLogsWorkbookTests(TestCase):
+    def test_initialization_routes_attendance_to_logs_workbook(self):
+        from database import google_sheets as db
+        main, logs = MagicMock(), MagicMock()
+        with patch.multiple(db, spreadsheet=None, logs_spreadsheet=None,
+                            students_sheet=None, attendance_sheet=None, logs_sheet=None), \
+             patch.dict(os.environ, {"GOOGLE_SHEET_LOGS_ID": "logs-id"}), \
+             patch.object(db, "connect_google_sheets", side_effect=[main, logs]) as connect, \
+             patch.object(db, "_find_attendance_table", return_value="A1:G1"):
+            self.assertIs(db.ensure_sheet_state(), main)
+            self.assertIs(db.logs_spreadsheet, logs)
+            main.worksheet.assert_called_once_with("Students")
+            self.assertEqual([call.args[0] for call in logs.worksheet.call_args_list], ["Attendance", "Logs"])
+            self.assertEqual(connect.call_args_list[1].args, ("GOOGLE_SHEET_LOGS_ID",))
+
+    def test_named_tabs_use_the_correct_workbook(self):
+        from database import google_sheets as db
+        main, logs = MagicMock(), MagicMock()
+        with patch.multiple(db, spreadsheet=main, logs_spreadsheet=logs):
+            for name in ("Audit Log", "Tickets", "User Settings"):
+                self.assertIs(db._ensure_named_sheet(name, ["header"]), logs.worksheet.return_value)
+            for name in ("Account Authorizations", "Morning Reports", "Time Out Drafts", "Time Out Reports"):
+                self.assertIs(db._ensure_named_sheet(name, ["header"]), main.worksheet.return_value)
+
+    def test_unavailable_logs_workbook_does_not_fall_back(self):
+        from database import google_sheets as db
+        main = MagicMock()
+        with patch.multiple(db, spreadsheet=None, logs_spreadsheet=None), \
+             patch.dict(os.environ, {"GOOGLE_SHEET_LOGS_ID": "logs-id"}), \
+             patch.object(db, "connect_google_sheets", side_effect=[main, RuntimeError("access denied")]):
+            self.assertIsNone(db.ensure_sheet_state())
+            self.assertIsNone(db.spreadsheet)
+            main.worksheet.assert_not_called()
+
+    def test_unset_logs_id_keeps_single_workbook_compatibility(self):
+        from database import google_sheets as db
+        main = MagicMock()
+        with patch.multiple(db, spreadsheet=None, logs_spreadsheet=None,
+                            students_sheet=None, attendance_sheet=None, logs_sheet=None), \
+             patch.dict(os.environ, {"GOOGLE_SHEET_LOGS_ID": ""}), \
+             patch.object(db, "connect_google_sheets", return_value=main) as connect, \
+             patch.object(db, "_find_attendance_table", return_value="A1:G1"):
+            self.assertIs(db.ensure_sheet_state(), main)
+            self.assertIs(db.logs_spreadsheet, main)
+            connect.assert_called_once_with()

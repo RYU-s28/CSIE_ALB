@@ -7,6 +7,14 @@ Set `GOOGLE_SERVICE_ACCOUNT_JSON` to the service account credentials JSON and
 `GOOGLE_SHEET_ID` to the spreadsheet ID. Share the spreadsheet with the service
 account's email address, with edit access.
 
+Set `GOOGLE_SHEET_LOGS_ID` to the separate spreadsheet containing `Attendance`,
+`Audit Log`, `Tickets`, and `User Settings`. Share this spreadsheet with the same
+service account with edit access as well. All other tabs stay in `GOOGLE_SHEET_ID`.
+The legacy `Logs` attendance table also uses the logs spreadsheet. If the logs ID
+is unset, the bot uses the original spreadsheet for all tabs; a configured logs
+spreadsheet that cannot be opened causes initialization to fail rather than
+writing logs into the original file. Restart the bot after changing these IDs.
+
 The bot writes attendance to the `Attendance` worksheet, with columns
 `student_id`, `name`, `date`, `type`, `status`, `raw_message`, and
 `attendance_intent`. It creates
@@ -326,3 +334,11 @@ it deletes every attendance record for that student and date and blanks the
 Monthly Report cell. This differs from **Present**, which explicitly records 出席.
 The clear action preserves the previous rows and grid value in the audit log
 for `/undo`. Other students and dates remain untouched.
+
+Natural leave notices recognize phrases such as "due to personal reasons I
+won't be able to make it to work on Wednesday" as full personal leave (事假).
+Good morning/afternoon greetings are excluded from half-day detection. Weekday
+names and abbreviations resolve to the upcoming occurrence, including today;
+"next Wednesday" on Wednesday means one week later, and "next week Wednesday"
+uses the following calendar week. Chinese weekday phrases are also supported.
+Dates are anchored to the original LINE message timestamp in Asia/Taipei.

@@ -767,7 +767,9 @@ def handle_message(event):
 
         matched_by_line_user_id = True
         try:
-            attendance_date = parse_attendance_date(text)
+            event_timestamp = getattr(event, "timestamp", None)
+            message_day = datetime.fromtimestamp(event_timestamp / 1000, ZoneInfo("Asia/Taipei")).date() if isinstance(event_timestamp, (int, float)) and not isinstance(event_timestamp, bool) and event_timestamp > 0 else None
+            attendance_date = parse_attendance_date(text, today=message_day)
             if analysis.intent == "LEAVE":
                 validate_leave_workday(attendance_date)
         except ValueError as error:

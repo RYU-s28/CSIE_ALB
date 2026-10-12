@@ -52,6 +52,9 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
         "有事",
         "家裡有事",
         "personal leave",
+        "personal reasons",
+        "personal reason",
+        "family reasons",
         "advance leave",
         "already took leave",
         "already requested leave",
@@ -132,6 +135,9 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
 MIN_ATTENDANCE_CONFIDENCE = 0.60
 
 LEAVE_INTENT_PATTERNS = (
+    r"\b(?:won't|will not|can't|cannot|unable to|not able to)\s+"
+    r"(?:be\s+)?(?:able\s+to\s+)?(?:make it|come|go|attend)"
+    r"(?:\s+to)?\s+(?:work|class)\b",
     r"\b(?:filed|filed for|already requested)\s+(?:a\s+)?leave\b",
     r"\b(?:i will be|i am|i\'m)\s+absent\b",
     r"\b(?:take|taking|request|requesting|apply for|applied for)\s+"
@@ -266,13 +272,18 @@ def classify_status(message: str) -> ClassificationResult:
     if confidence < MIN_ATTENDANCE_CONFIDENCE:
         return _unknown_result()
 
+    partial_text = re.sub(
+        r"^(?:(?:hi|hello|hey|good\s+(?:morning|afternoon|evening))\b"
+        r"(?:\s+(?:everyone|all|guys))?[\s,!，！.:：;-]*)+", "", text,
+    )
+    partial_text = re.sub(r"^(?:大家)?(?:早安|午安|晚安|早上好|下午好|晚上好)[\s，,!！.:：]*", "", partial_text)
     if has_leave_intent and any(
-        keyword in text for keyword in PARTIAL_DAY_KEYWORDS
+        keyword in partial_text for keyword in PARTIAL_DAY_KEYWORDS
     ):
         partial_day_keyword = next(
             keyword
             for keyword in PARTIAL_DAY_KEYWORDS
-            if keyword in text
+            if keyword in partial_text
         )
         return ClassificationResult(
             status="half_day",
@@ -303,4 +314,4 @@ def _unknown_result(*, attendance_intent: bool = False) -> ClassificationResult:
 def normalize_text(text: str) -> str:
     """Normalize input for keyword matching."""
 
-    return " ".join(text.lower().strip().split())
+    return " ".join(text.lower().replace("’", "'").replace("‘", "'").strip().split())

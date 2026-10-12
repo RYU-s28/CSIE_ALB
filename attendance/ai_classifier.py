@@ -14,6 +14,7 @@ from .classifier import (
     KEYWORDS,
     MIN_ATTENDANCE_CONFIDENCE,
     classify_status,
+    normalize_text,
 )
 
 
@@ -190,10 +191,12 @@ def _python_confidently_detects_leave_intent(
 
     if not result.attendance_intent:
         return False
-    text = message.casefold().strip()
+    text = normalize_text(message)
     if "?" in text or "？" in text:
         return False
     if re.match(r"^(who|what|when|where|why|how|can you|could you|please)\b", text):
+        return False
+    if re.search(r"\blast\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", text):
         return False
     if any(
         marker in text
@@ -230,7 +233,8 @@ def _python_confidently_detects_leave_intent(
     if re.search(
         r"\b(?:i|i'm|i am|we|we're|we are)\b.{0,100}"
         r"\b(?:can't|cannot|won't|will not|unable|not coming|"
-        r"taking leave|request(?:ing)? leave|filed(?: for)? leave|will be absent)\b",
+        r"(?:taking|request(?:ing)?)\s+(?:(?:sick|personal|menstrual|medical|annual|special)\s+)?leave|"
+        r"filed(?: for)? leave|will be absent)\b",
         text,
     ):
         return True
@@ -271,7 +275,7 @@ def _python_confidently_detects_no_bus_notice(
     if _python_confidently_detects_leave_intent(message, result):
         return False
 
-    text = message.casefold().strip()
+    text = normalize_text(message)
     if "?" in text or "？" in text:
         return False
     if re.match(r"^(?:you|he|she|they)\b", text) or text.startswith(
@@ -293,7 +297,7 @@ def _has_attendance_signal(message: str, result: ClassificationResult) -> bool:
 
     if result.attendance_intent:
         return True
-    text = message.casefold()
+    text = normalize_text(message)
     if any(term in text for term in ATTENDANCE_SIGNAL_TERMS):
         return True
     if any(phrase in text for phrase in CHINESE_LEAVE_INTENT_PHRASES):

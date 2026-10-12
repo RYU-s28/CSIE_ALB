@@ -1587,3 +1587,48 @@ def get_work_calendar_schedule(
             "note": note,
         })
     return schedule_list
+
+LANGUAGE_HEADERS = ["LINE User ID", "Language"]
+
+
+def get_user_language(user_id: str) -> str:
+    sheet = _ensure_named_sheet("User Settings", LANGUAGE_HEADERS)
+    if sheet is None:
+        return "en"
+    for row in sheet.get_all_values()[1:]:
+        if row and row[0] == user_id:
+            return row[1] if len(row) > 1 and row[1] in {"en", "zh-TW"} else "en"
+    return "en"
+
+
+def set_user_language(user_id: str, language: str) -> None:
+    if language not in {"en", "zh-TW"} or not user_id:
+        raise ValueError("Invalid language preference.")
+    sheet = _ensure_named_sheet("User Settings", LANGUAGE_HEADERS)
+    if sheet is None:
+        raise RuntimeError("Google Sheets is unavailable.")
+    for index, row in enumerate(sheet.get_all_values()[1:], start=2):
+        if row and row[0] == user_id:
+            sheet.update_cell(index, 2, language)
+            return
+    sheet.append_row([user_id, language], value_input_option="RAW")
+
+
+AUTHORIZATION_HEADERS = ["LINE User ID", "Student ID", "Authorized At", "Terms Version"]
+
+
+def save_account_authorization(user_id: str, student_id: str) -> None:
+    """Record consent only for the student's already linked LINE account."""
+    student = find_student_by_line_user_id(user_id)
+    if not student or str(student.get("student_id", "")).strip() != student_id:
+        raise ValueError("The LINE account is not linked to this student.")
+    sheet = _ensure_named_sheet("Account Authorizations", AUTHORIZATION_HEADERS)
+    if sheet is None:
+        raise RuntimeError("Google Sheets is unavailable.")
+    for row in sheet.get_all_values()[1:]:
+        if len(row) >= 4 and row[0] == user_id and row[1] == student_id and row[3] == "1":
+            return  # Retain the original consent timestamp on repeated taps.
+    sheet.append_row(
+        [user_id, student_id, datetime.now(ZoneInfo("Asia/Taipei")).isoformat(), "1"],
+        value_input_option="RAW",
+    )

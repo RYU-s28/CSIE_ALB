@@ -116,3 +116,37 @@ leave-marking convention; a blank cell today remains pending. Late arrivals
 count as attended, half-days count as 0.5, and future leave is excluded from
 month-to-date totals. Missing report sections or student rows produce a retrieval
 error instead of falling back to leave records.
+
+## Language settings and first greeting
+
+The bot's initial account card is English and its title is `CSIE Student`.
+Students can open **Language / 語言** from the welcome or initialization card,
+or send `/language` or `/settings` in a private chat. Choose **English** or
+**繁體中文**. Preferences persist by LINE user ID in the `User Settings` sheet.
+English is the default. AI translates visible private reply text and Flex cards
+using `GEMINI_API_KEY`; IDs and button action data remain unchanged. Translations
+are cached in memory. If translation fails, the original message is sent.
+Group reports retain their existing language. The fixed LINE rich-menu image
+is not translated.
+
+The separate automatic friend greeting is configured in LINE Official Account
+Manager, outside this repository. Replace its Chinese greeting with:
+
+> Hi! Welcome to CSIE Student. View your attendance, check your work schedule,
+> and submit leave notices here. Use the menu below to get started. You can
+> change your language to English or Traditional Chinese in Language Settings.
+
+Alternatively, disable that automatic greeting so the bot's English account
+initialization card is the first message.
+
+## Account authorization
+
+On first contact, a unique active roster-name match automatically saves the
+sender's LINE user ID in the Students sheet. The initialization card ends with
+**Authorize & Connect Account**. Tapping it in a private chat rechecks the sender's
+identity, connects the account if possible, and records the student ID, LINE user
+ID, Taipei timestamp, and terms version in `Account Authorizations`. Repeated
+taps preserve the original timestamp. Unmatched, duplicate-name, and conflicting
+accounts remain unlinked and need roster correction. The button also retries
+matching after a display name or roster correction. Existing `agree_terms`
+buttons use the same saved authorization flow.

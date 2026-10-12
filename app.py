@@ -36,6 +36,10 @@ from attendance.leave_message import (
     parse_attendance_date,
 )
 from attendance.salary import calculate_salary
+from bot.language import localize_message, private_language_context
+from bot.line_ui import language_settings_message
+from database.google_sheets import set_user_language, save_account_authorization
+
 from bot.commands import (
     handle_command,
     is_admin_user,
@@ -174,6 +178,7 @@ async def callback(
 # --------------------------------------------------
 def reply_to_line(reply_token: str, message: str | FlexMessage):
     try:
+        message = localize_message(message)
         with ApiClient(configuration) as api_client:
             messaging_api = MessagingApi(api_client)
 
@@ -199,6 +204,7 @@ def push_to_line(user_id: str, message: str | FlexMessage) -> bool:
     """Send private attendance details without exposing them in a group."""
 
     try:
+        message = localize_message(message, user_id)
         with ApiClient(configuration) as api_client:
             messaging_api = MessagingApi(api_client)
             messaging_api.push_message(
@@ -421,6 +427,7 @@ def handle_follow(event):
     MessageEvent,
     message=TextMessageContent,
 )
+@private_language_context
 def handle_message(event):
     text = event.message.text or ""
 
@@ -435,6 +442,10 @@ def handle_message(event):
     print("USER:", user_id)
     print("GROUP:", group_id)
     print("MESSAGE:", text)
+
+    if is_private_chat and text.strip().lower() in {"/language", "/settings", "language", "語言", "設定"}:
+        reply_to_line(event.reply_token, language_settings_message())
+        return
 
     student = None
     was_registered = False
@@ -701,6 +712,7 @@ def handle_message(event):
 
 
 @handler.add(PostbackEvent)
+@private_language_context
 def handle_postback(event):
     """Route card actions after validating identity and the exact record."""
 
@@ -711,21 +723,47 @@ def handle_postback(event):
     group_id = getattr(event.source, "group_id", None)
     room_id = getattr(event.source, "room_id", None)
 
+    if action in {"language_settings", "set_language"}:
+        if getattr(event.source, "type", "") != "user" or not user_id:
+            reply_to_line(event.reply_token, "Please change your language in a private chat with the bot.")
+            return
+        if action == "language_settings":
+            reply_to_line(event.reply_token, language_settings_message())
+            return
+        language = data.get("language", [""])[0]
+        try:
+            if language == "zh-TW" and not os.getenv("GEMINI_API_KEY"):
+                raise RuntimeError("AI translation is not configured.")
+            set_user_language(user_id, language)
+            reply_to_line(event.reply_token, "Language set to English." if language == "en" else "語言已設定為繁體中文。")
+        except (ValueError, RuntimeError):
+            reply_to_line(event.reply_token, "I couldn't save your language setting. Please contact an administrator.")
+        return
+
     if action in {"help", "hello"}:
         student = resolve_student_from_event(event)
         reply_to_line(event.reply_token, welcome_message(student=student))
         return
 
-    if action == "agree_terms":
-        student = resolve_student_from_event(event)
-        if student:
-            reply_to_line(event.reply_token, terms_agreement_confirmed_message(student))
-        else:
-            display_name = get_line_display_name(user_id) if user_id else None
-            reply_to_line(
-                event.reply_token,
-                initialization_message(student=None, display_name=display_name, error_status="unmatched"),
-            )
+    if action in {"authorize_account", "agree_terms"}:
+        if getattr(event.source, "type", "") != "user" or not user_id:
+            reply_to_line(event.reply_token, "Please authorize your account in a private chat with the bot.")
+            return
+        try:
+            # Resolve the sender from LINE, never a student ID supplied in the button.
+            ident = identify_or_register_student(event)
+            student = ident.student
+            if student:
+                save_account_authorization(user_id, str(student["student_id"]).strip())
+                reply_to_line(event.reply_token, terms_agreement_confirmed_message(student))
+            else:
+                reply_to_line(
+                    event.reply_token,
+                    initialization_message(student=None, display_name=ident.display_name, error_status=ident.status),
+                )
+        except Exception as error:
+            print("ACCOUNT AUTHORIZATION ERROR:", type(error).__name__)
+            reply_to_line(event.reply_token, "I couldn't save your account authorization. Please try again or contact an administrator.")
         return
 
     if action == "richmenu_attendance":

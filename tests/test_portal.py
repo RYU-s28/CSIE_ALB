@@ -469,3 +469,122 @@ class TestStudentDirectoryMatching(TestCase):
         student = resolve_student_from_event(event)
         self.assertIsNotNone(student)
         self.assertEqual(student["student_id"], "ST102")
+
+
+class TestLanguageSettings(TestCase):
+    def test_title_and_language_options(self):
+        from bot.line_ui import language_settings_message
+        import json
+        card = initialization_message()
+        content = json.dumps(card.contents.data)
+        self.assertIn('"text": "CSIE Student"', content)
+        self.assertNotIn('"text": "CSIE Student Portal"', content)
+        menu = json.dumps(language_settings_message().contents.data)
+        self.assertIn("action=set_language&language=en", menu)
+        self.assertIn("action=set_language&language=zh-TW", menu)
+
+    def test_saved_preference_and_default(self):
+        from database.google_sheets import get_user_language, set_user_language
+        sheet = MagicMock()
+        sheet.get_all_values.return_value = [["LINE User ID", "Language"], ["U1", "zh-TW"]]
+        with patch("database.google_sheets._ensure_named_sheet", return_value=sheet):
+            self.assertEqual(get_user_language("U1"), "zh-TW")
+            self.assertEqual(get_user_language("U2"), "en")
+            set_user_language("U1", "en")
+            sheet.update_cell.assert_called_once_with(2, 2, "en")
+            set_user_language("U2", "zh-TW")
+            sheet.append_row.assert_called_once_with(["U2", "zh-TW"], value_input_option="RAW")
+
+    def test_ai_translates_only_visible_text(self):
+        from bot.language import localize_message
+        class FakeMessage:
+            def to_dict(self):
+                return {"type": "flex", "altText": "My Attendance", "contents": {
+                    "type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [
+                        {"type": "text", "text": "Student Name"},
+                        {"type": "text", "text": "趙浩然"},
+                        {"type": "text", "text": "S06674"},
+                        {"type": "button", "action": {"type": "postback", "label": "View", "data": "action=view&id=S06674"}},
+                    ]},
+                }}
+        def translate(texts, language):
+            self.assertEqual(language, "zh-TW")
+            self.assertNotIn("趙浩然", texts)
+            self.assertNotIn("S06674", texts)
+            return tuple("譯文" for _ in texts)
+        with patch("database.google_sheets.get_user_language", return_value="zh-TW"), patch(
+            "database.google_sheets.find_student_by_line_user_id", return_value={"chinese_name": "趙浩然", "student_id": "S06674"}
+        ), patch("bot.language.translate_texts", side_effect=translate), patch(
+            "linebot.v3.messaging.FlexMessage.from_dict", side_effect=lambda value: value, create=True
+        ):
+            result = localize_message(FakeMessage(), "U1")
+        items = result["contents"]["body"]["contents"]
+        self.assertEqual(items[0]["text"], "譯文")
+        self.assertEqual(items[1]["text"], "趙浩然")
+        self.assertEqual(items[3]["action"]["data"], "action=view&id=S06674")
+
+    def test_translation_failure_preserves_message(self):
+        from bot.language import localize_message
+        with patch("database.google_sheets.get_user_language", return_value="zh-TW"), patch(
+            "database.google_sheets.find_student_by_line_user_id", return_value=None
+        ), patch("bot.language.translate_texts", side_effect=RuntimeError("Unavailable")):
+            self.assertEqual(localize_message("My Attendance", "U1"), "My Attendance")
+
+    def test_group_context_and_reset(self):
+        from bot.language import private_language_context, recipient
+        from types import SimpleNamespace
+        @private_language_context
+        def read(event):
+            return recipient.get()
+        self.assertEqual(read(SimpleNamespace(source=SimpleNamespace(type="user", user_id="U1"))), "U1")
+        self.assertIsNone(read(SimpleNamespace(source=SimpleNamespace(type="group", user_id="U1"))))
+        self.assertIsNone(recipient.get())
+
+
+class TestAccountAuthorization(TestCase):
+    def test_authorize_button_is_last_for_both_account_states(self):
+        for student in (None, {"student_id": "ST101", "name": "Romel"}):
+            card = initialization_message(student)
+            button = card.contents.data["body"]["contents"][-1]
+            self.assertEqual(button["action"]["label"], "Authorize & Connect Account")
+            self.assertEqual(button["action"]["data"], "action=authorize_account")
+
+    def test_first_chat_saves_line_id_to_matching_roster_row(self):
+        from app import identify_or_register_student
+        from types import SimpleNamespace
+        student = {"student_id": "ST101", "name": "Romel", "line_user_id": ""}
+        event = SimpleNamespace(source=SimpleNamespace(user_id="U1", type="user"))
+        with patch("app.find_student_by_line_user_id", return_value=None), patch(
+            "app.get_line_display_name", return_value="Romel"
+        ), patch("app.find_students_by_display_name", return_value=[student]), patch(
+            "app.register_line_user"
+        ) as register:
+            result = identify_or_register_student(event)
+        self.assertEqual(result.status, "registered")
+        register.assert_called_once_with(student, "U1")
+        self.assertEqual(result.student["line_user_id"], "U1")
+
+    def test_authorization_persists_and_repeat_is_idempotent(self):
+        from database.google_sheets import save_account_authorization
+        sheet = MagicMock()
+        sheet.get_all_values.return_value = [["LINE User ID", "Student ID", "Authorized At", "Terms Version"]]
+        with patch("database.google_sheets.find_student_by_line_user_id", return_value={"student_id": "ST101"}), patch(
+            "database.google_sheets._ensure_named_sheet", return_value=sheet
+        ):
+            save_account_authorization("U1", "ST101")
+            values = sheet.append_row.call_args.args[0]
+            self.assertEqual(values[:2], ["U1", "ST101"])
+            self.assertTrue(values[2])
+            self.assertEqual(values[3], "1")
+            sheet.get_all_values.return_value.append(values)
+            save_account_authorization("U1", "ST101")
+            sheet.append_row.assert_called_once()
+
+    def test_authorization_rejects_wrong_student(self):
+        from database.google_sheets import save_account_authorization
+        with patch("database.google_sheets.find_student_by_line_user_id", return_value={"student_id": "ST102"}), patch(
+            "database.google_sheets._ensure_named_sheet"
+        ) as sheet:
+            with self.assertRaises(ValueError):
+                save_account_authorization("U1", "ST101")
+            sheet.assert_not_called()

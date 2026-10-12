@@ -865,7 +865,8 @@ def welcome_message(
                     "contents": [
                         {
                             "type": "text",
-                            "text": "CSIE Student Portal",
+                            "text": "CSIE Student",
+                            "wrap": True,
                             "weight": "bold",
                             "size": "xl",
                             "color": DARK_GREEN,
@@ -925,6 +926,8 @@ def welcome_message(
                 _stat_row("Work Schedule", "/schedule", bold=False, margin="xs"),
                 _stat_row("Leave Request", "/leaverequest", bold=False, margin="xs"),
                 _stat_row("Help Center", "/ticket", bold=False, margin="xs"),
+                _button("Language / 語言", "action=language_settings", margin="md"),
+                _button("Authorize & Connect Account", "action=authorize_account", margin="md"),
                 _button("Open Rich Menu", "action=richmenu_attendance", margin="lg"),
             ],
         },
@@ -973,7 +976,8 @@ def initialization_message(
             "contents": [
                 {
                     "type": "text",
-                    "text": "CSIE Student Portal",
+                    "text": "CSIE Student",
+                    "wrap": True,
                     "weight": "bold",
                     "size": "xl",
                     "color": DARK_GREEN,
@@ -1041,9 +1045,10 @@ def initialization_message(
                 {
                     "type": "text",
                     "text": (
-                        "By using this bot, you agree to allow CSIE Attendance Bot "
-                        "to link your LINE account to record attendance, calculate salary estimates, "
-                        "manage leave requests, and track work schedules in accordance with lab policy."
+                        "By tapping Authorize & Connect Account, you confirm the student identity "
+                        "shown above and accept these terms. You authorize CSIE Attendance Bot "
+                        "to use your linked LINE account for attendance, salary estimates, "
+                        "leave requests, and work schedules in accordance with lab policy."
                     ),
                     "size": "xs",
                     "color": MUTED_TEXT,
@@ -1066,7 +1071,6 @@ def initialization_message(
             ],
         })
 
-        body_contents.append(_button("✅ Agree to Terms & Get Started", "action=agree_terms", margin="md"))
         body_contents.append(_button("Open Rich Menu", "action=richmenu_attendance", color=DARK_GREEN, margin="xs"))
     else:
         body_contents.append({
@@ -1144,6 +1148,8 @@ def initialization_message(
 
         body_contents.append(_button("❓ Contact Admin / Support", "action=richmenu_help", margin="md"))
 
+    body_contents.append(_button("Language / 語言", "action=language_settings", margin="md"))
+    body_contents.append(_button("Authorize & Connect Account", "action=authorize_account", margin="md"))
     bubble: dict[str, object] = {
         "type": "bubble",
         "size": "mega",
@@ -1196,7 +1202,8 @@ def terms_agreement_confirmed_message(
                     "contents": [
                         {
                             "type": "text",
-                            "text": "CSIE Student Portal",
+                            "text": "CSIE Student",
+                            "wrap": True,
                             "weight": "bold",
                             "size": "xl",
                             "color": DARK_GREEN,
@@ -1207,7 +1214,7 @@ def terms_agreement_confirmed_message(
                 },
                 {
                     "type": "text",
-                    "text": "Terms Accepted · Account Active",
+                    "text": "Authorization Saved · Terms Accepted",
                     "size": "xs",
                     "color": MUTED_TEXT,
                     "margin": "xs",
@@ -1230,7 +1237,7 @@ def terms_agreement_confirmed_message(
                         {
                             "type": "text",
                             "text": (
-                                f"Welcome, {student_name}! You have agreed to the terms and usage. "
+                                f"Welcome, {student_name}! Your account authorization and acceptance of the terms have been saved. "
                                 "Your LINE account is fully connected and recognized in the CSIE Attendance database."
                             ),
                             "size": "xs",
@@ -1250,6 +1257,7 @@ def terms_agreement_confirmed_message(
                 _stat_row("Work Schedule", "/schedule", bold=False, margin="xs"),
                 _stat_row("Leave Request", "/leaverequest", bold=False, margin="xs"),
                 _stat_row("Help Center", "/ticket", bold=False, margin="xs"),
+                _button("Language / 語言", "action=language_settings", margin="md"),
                 _button("Open Rich Menu", "action=richmenu_attendance", margin="md"),
             ],
         },
@@ -1268,4 +1276,20 @@ def terms_agreement_confirmed_message(
                 QuickReplyItem(action=PostbackAction(label="Help Center", data="action=richmenu_help", display_text="Help Center")),
             ]
         ),
+    )
+
+
+def language_settings_message() -> FlexMessage:
+    return FlexMessage(
+        alt_text="Language / 語言",
+        contents=FlexContainer.from_dict({
+            "type": "bubble", "body": {
+                "type": "box", "layout": "vertical", "backgroundColor": CARD_BG,
+                "contents": [
+                    {"type": "text", "text": "Language / 語言", "weight": "bold", "wrap": True},
+                    _button("English", "action=set_language&language=en", margin="md"),
+                    _button("繁體中文", "action=set_language&language=zh-TW", margin="md"),
+                ],
+            },
+        }),
     )

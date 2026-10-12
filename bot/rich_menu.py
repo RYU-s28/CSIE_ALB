@@ -38,73 +38,68 @@ def get_image_hash(path: Path) -> str:
         return "default"
 
 
-def build_rich_menu_request(name: str | None = None) -> RichMenuRequest:
-    """Build the 6-tile RichMenuRequest matching the LINE large 6-tile template (2500x1686)."""
+ADMIN_MENU_NAME = "CSIE Admin Portal"
+_ADMIN_MENU_ID = None
+_MENU_ROLE_CACHE = {}
+
+
+def build_rich_menu_request(name: str | None = None, *, admin: bool = False) -> RichMenuRequest:
+    labels = ["My Attendance", "Leave History", "Salary Inquiry", "Time Out Report" if admin else "Work Schedule", "Attendance Status" if admin else "Leave Request", "Help Center"]
+    actions = ["richmenu_attendance", "richmenu_leave_history", "richmenu_salary", "admin_timeout" if admin else "richmenu_schedule", "admin_attendance" if admin else "richmenu_leave_request", "admin_tickets" if admin else "richmenu_help"]
+    widths = [833, 834, 833]
+    positions = [0, 833, 1667]
     return RichMenuRequest(
-        size=RichMenuSize(width=2500, height=1686),
-        selected=True,
-        name=name or BASE_MENU_NAME,
-        chat_bar_text=CHAT_BAR_TEXT,
-        areas=[
-            # Row 1, Col 1: My Attendance (833 x 843)
-            RichMenuArea(
-                bounds=RichMenuBounds(x=0, y=0, width=833, height=843),
-                action=PostbackAction(
-                    label="My Attendance",
-                    data="action=richmenu_attendance",
-                    display_text="My Attendance",
-                ),
-            ),
-            # Row 1, Col 2: Leave History (834 x 843)
-            RichMenuArea(
-                bounds=RichMenuBounds(x=833, y=0, width=834, height=843),
-                action=PostbackAction(
-                    label="Leave History",
-                    data="action=richmenu_leave_history",
-                    display_text="Leave History",
-                ),
-            ),
-            # Row 1, Col 3: Salary Inquiry (833 x 843)
-            RichMenuArea(
-                bounds=RichMenuBounds(x=1667, y=0, width=833, height=843),
-                action=PostbackAction(
-                    label="Salary Inquiry",
-                    data="action=richmenu_salary",
-                    display_text="Salary Inquiry",
-                ),
-            ),
-            # Row 2, Col 1: Work Schedule (833 x 843)
-            RichMenuArea(
-                bounds=RichMenuBounds(x=0, y=843, width=833, height=843),
-                action=PostbackAction(
-                    label="Work Schedule",
-                    data="action=richmenu_schedule",
-                    display_text="Work Schedule",
-                ),
-            ),
-            # Row 2, Col 2: Leave Request (834 x 843)
-            RichMenuArea(
-                bounds=RichMenuBounds(x=833, y=843, width=834, height=843),
-                action=PostbackAction(
-                    label="Leave Request",
-                    data="action=richmenu_leave_request",
-                    display_text="Leave Request",
-                ),
-            ),
-            # Row 2, Col 3: Help Center (833 x 843)
-            RichMenuArea(
-                bounds=RichMenuBounds(x=1667, y=843, width=833, height=843),
-                action=PostbackAction(
-                    label="Help Center",
-                    data="action=richmenu_help",
-                    display_text="Help Center",
-                ),
-            ),
-        ],
+        size=RichMenuSize(width=2500, height=1686), selected=True,
+        name=name or (ADMIN_MENU_NAME if admin else BASE_MENU_NAME),
+        chat_bar_text="Admin Portal" if admin else CHAT_BAR_TEXT,
+        areas=[RichMenuArea(
+            bounds=RichMenuBounds(x=positions[index % 3], y=(index // 3) * 843, width=widths[index % 3], height=843),
+            action=PostbackAction(label=label, data=f"action={actions[index]}", display_text=label),
+        ) for index, label in enumerate(labels)],
     )
 
 
-def setup_rich_menu(*, force: bool = False, target_image: Path | None = None) -> str | None:
+def _link_administrator_menu(messaging_api, menu_id):
+    global _ADMIN_MENU_ID
+    from bot.commands import _admin_ids
+    _ADMIN_MENU_ID = menu_id
+    linked = True
+    for user_id in _admin_ids():
+        if user_id.startswith("U"):
+            try:
+                messaging_api.link_rich_menu_id_to_user(user_id, menu_id)
+            except Exception as error:
+                linked = False
+                print("ADMIN MENU LINK ERROR:", type(error).__name__)
+    return linked
+
+
+def sync_user_menu(user_id: str, *, force=False):
+    """Refresh role-specific menus; permission checks still run on every action."""
+    from bot.commands import is_admin_user
+    if not user_id or not _ADMIN_MENU_ID:
+        return
+    admin = is_admin_user(user_id)
+    if not force and _MENU_ROLE_CACHE.get(user_id) == admin:
+        return
+    with ApiClient(Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))) as client:
+        api = MessagingApi(client)
+        if admin:
+            api.link_rich_menu_id_to_user(user_id, _ADMIN_MENU_ID)
+        else:
+            try:
+                current = api.get_rich_menu_id_of_user(user_id)
+                menu_id = getattr(current, "rich_menu_id", None)
+                if menu_id == _ADMIN_MENU_ID:
+                    api.unlink_rich_menu_id_from_user(user_id)
+            except Exception:
+                pass  # No per-user menu is normal for a student.
+    if len(_MENU_ROLE_CACHE) >= 10000:
+        _MENU_ROLE_CACHE.clear()
+    _MENU_ROLE_CACHE[user_id] = admin
+
+
+def setup_rich_menu(*, force: bool = False, target_image: Path | None = None, admin: bool = False) -> str | None:
     """Create, upload image for, and set default Rich Menu in LINE.
     
     Guarantees:
@@ -118,17 +113,18 @@ def setup_rich_menu(*, force: bool = False, target_image: Path | None = None) ->
         print("RICH MENU SETUP: LINE_CHANNEL_ACCESS_TOKEN is missing.")
         return None
 
-    img_path = target_image or (
+    img_path = target_image or (IMAGE_DIR / "admin_rich_menu.png" if admin else (
         IMAGE_DIR / "rich_menu.jpg"
         if (IMAGE_DIR / "rich_menu.jpg").exists()
         else IMAGE_DIR / "rich_menu.png"
-    )
+    ))
     if not img_path.exists():
         print(f"RICH MENU SETUP: Image file not found at {img_path}")
         return None
 
     img_hash = get_image_hash(img_path)
-    target_menu_name = f"{BASE_MENU_NAME} ({img_hash})"
+    base_name = ADMIN_MENU_NAME if admin else BASE_MENU_NAME
+    target_menu_name = f"{base_name} ({img_hash})"
 
     configuration = Configuration(access_token=token)
     try:
@@ -150,6 +146,9 @@ def setup_rich_menu(*, force: bool = False, target_image: Path | None = None) ->
                         break
 
                 if current_active_menu and not force:
+                    if admin:
+                        _link_administrator_menu(messaging_api, current_active_menu.rich_menu_id)
+                        return current_active_menu.rich_menu_id
                     # Check if already set as default
                     try:
                         def_res = messaging_api.get_default_rich_menu_id()
@@ -167,7 +166,7 @@ def setup_rich_menu(*, force: bool = False, target_image: Path | None = None) ->
                 print("RICH MENU LOOKUP WARNING:", repr(error))
 
             # 1. Create a NEW Rich Menu first (preserving existing menu until replacement is ready)
-            rich_menu_req = build_rich_menu_request(name=target_menu_name)
+            rich_menu_req = build_rich_menu_request(name=target_menu_name, admin=admin)
             response = messaging_api.create_rich_menu(rich_menu_request=rich_menu_req)
             new_rich_menu_id = response.rich_menu_id
             print(f"RICH MENU CREATED: {new_rich_menu_id} ({target_menu_name})")
@@ -200,13 +199,17 @@ def setup_rich_menu(*, force: bool = False, target_image: Path | None = None) ->
             print(f"RICH MENU IMAGE UPLOADED: {new_rich_menu_id}")
 
             # 3. Link the new menu as the default ONLY after successful creation and upload
-            messaging_api.set_default_rich_menu(new_rich_menu_id)
-            print(f"RICH MENU SET AS DEFAULT: {new_rich_menu_id}")
+            linked = True
+            if admin:
+                linked = _link_administrator_menu(messaging_api, new_rich_menu_id)
+            else:
+                messaging_api.set_default_rich_menu(new_rich_menu_id)
+            print(f"RICH MENU ACTIVATED: {new_rich_menu_id}")
 
             # 4. Clean up old menus now that the new one is active
-            if menu_list:
+            if menu_list and linked:
                 for menu in menu_list.richmenus:
-                    if menu.rich_menu_id != new_rich_menu_id:
+                    if menu.rich_menu_id != new_rich_menu_id and menu.name.startswith(base_name + " ("):
                         try:
                             messaging_api.delete_rich_menu(menu.rich_menu_id)
                             print(f"RICH MENU CLEANED UP OLD MENU: {menu.rich_menu_id}")

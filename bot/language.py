@@ -4,6 +4,7 @@ from functools import lru_cache, wraps
 import json
 import os
 import re
+from urllib.parse import parse_qs
 
 from attendance.ai_classifier import GEMINI_MODEL, _generate_json
 
@@ -57,6 +58,12 @@ def localize_message(message, user_id=None):
         protected = {str(student.get(key) or "") for key in (
             "student_id", "name", "chinese_name", "full_name", "display_name", "line_display_name", "line_user_id",
         )}
+        from bot.commands import is_admin_user
+        if is_admin_user(user_id):
+            from database.google_sheets import get_report_students
+            roster, _ = get_report_students()
+            protected.update(value.display_name for value in roster.values())
+            protected.update(roster.keys())
         protected.update({"CSIE Student", "Language / 語言", "English", "繁體中文"})
         payload = {"text": message} if isinstance(message, str) else message.to_dict()
         # Unmatched accounts have no roster record. Protect identity values
@@ -64,6 +71,12 @@ def localize_message(message, user_id=None):
         identity_labels = {"LINE Name", "Student Name", "Student ID", "LINE User ID", "Full Name", "Chinese Name"}
         def protect_card_identities(node):
             if isinstance(node, dict):
+                button_action = node.get("action", {})
+                if isinstance(button_action, dict):
+                    action_data = parse_qs(button_action.get("data", ""))
+                    if action_data.get("action") == ["admin_student"] and action_data.get("student"):
+                        # Roster-picker labels contain another student's name.
+                        protected.add(str(button_action.get("label", "")))
                 children = node.get("contents", [])
                 if node.get("layout") == "horizontal" and isinstance(children, list) and len(children) == 2:
                     label, value = children

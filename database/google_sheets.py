@@ -1030,7 +1030,7 @@ def get_ticket(ticket_id: str) -> dict[str, str] | None:
     return None
 
 
-def update_ticket(ticket_id: str, actor_line_user_id: str, *, close: bool) -> bool:
+def update_ticket(ticket_id: str, actor_line_user_id: str, *, close: bool, note: str = "") -> bool:
     sheet = _ensure_named_sheet("Tickets", TICKET_HEADERS)
     if sheet is None:
         raise RuntimeError("Tickets worksheet is unavailable.")
@@ -1038,8 +1038,8 @@ def update_ticket(ticket_id: str, actor_line_user_id: str, *, close: bool) -> bo
         if row and row[0].casefold() == ticket_id.casefold():
             if close:
                 sheet.update(
-                    range_name=f"F{row_number}:H{row_number}",
-                    values=[["CLOSED", actor_line_user_id, datetime.now(ZoneInfo("Asia/Taipei")).isoformat()]],
+                    range_name=f"F{row_number}:I{row_number}",
+                    values=[["CLOSED", actor_line_user_id, datetime.now(ZoneInfo("Asia/Taipei")).isoformat(), note]],
                     value_input_option="RAW",
                 )
             else:
@@ -1313,11 +1313,8 @@ def update_monthly_report_cell(
         return False
 
 
-def get_monthly_report_entries(
-    student_id: str, target_month: date,
-) -> dict[date, str]:
-    """Read scheduled dates and cell labels from one monthly report row."""
-
+def _monthly_report_layout(target_month: date):
+    """Read one month block once for both personal and administrator views."""
     sheet = _get_monthly_report_sheet()
     if sheet is None:
         raise RuntimeError("The Monthly Report worksheet is unavailable.")
@@ -1360,31 +1357,47 @@ def get_monthly_report_entries(
         r"October|November|December)\s+\d{4}\b",
         re.IGNORECASE,
     )
-    student_row = None
+    end_row = len(rows)
     for row_index in range(day_row + 1, len(rows)):
-        row = rows[row_index]
-        if any(
-            str(row[column]).strip() == str(student_id).strip()
-            for column in range(
-                max(0, student_id_col - 1),
-                min(student_id_col + 3, len(row)),
-            )
-        ):
-            student_row = row
+        if next_month_re.search(" ".join(str(cell) for cell in rows[row_index])):
+            end_row = row_index
             break
-        if next_month_re.search(" ".join(str(cell) for cell in row)):
-            break
-    if student_row is None:
-        raise ValueError(
-            f"Student {student_id!r} was not found in the "
-            f"{target_month:%B %Y} report."
-        )
+    return rows[day_row + 1:end_row], day_to_col, student_id_col
 
+
+def _entries_for_report_student(rows, day_to_col, student_id_col, student_id, target_month):
+    student_row = next((row for row in rows if any(
+        str(row[column]).strip() == str(student_id).strip()
+        for column in range(max(0, student_id_col - 1), min(student_id_col + 3, len(row)))
+    )), None)
+    if student_row is None:
+        raise ValueError(f"Student {student_id!r} was not found in the {target_month:%B %Y} report.")
     return {
         date(target_month.year, target_month.month, day):
         str(student_row[column]).strip() if column < len(student_row) else ""
         for day, column in day_to_col.items()
     }
+
+
+def get_monthly_report_entries(student_id: str, target_month: date) -> dict[date, str]:
+    """Read scheduled dates and cell labels from one monthly report row."""
+    rows, day_to_col, student_id_col = _monthly_report_layout(target_month)
+    return _entries_for_report_student(rows, day_to_col, student_id_col, student_id, target_month)
+
+
+def get_daily_monthly_report(target_date: date) -> list[dict[str, str]]:
+    """Read each active student's daily status from the authoritative grid."""
+    students, _ = get_report_students()
+    rows, columns, id_col = _monthly_report_layout(target_date)
+    statuses = []
+    for student_id, student in students.items():
+        try:
+            entries = _entries_for_report_student(rows, columns, id_col, student_id, target_date)
+            status = entries.get(target_date, "Rest Day")
+        except ValueError:
+            status = "Missing Report Row"
+        statuses.append({"student_id": student_id, "name": student.display_name, "type": status})
+    return statuses
 
 
 def get_monthly_attendance_counts(

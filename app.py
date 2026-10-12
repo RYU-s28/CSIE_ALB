@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ from linebot.v3.webhooks import (
 )
 
 from attendance.attendance import AttendanceTracker
+from attendance.report import DailyReportText
 from attendance.ai_classifier import classify_attendance_message
 from attendance.leave_message import (
     LEAVE_TYPE_LABELS,
@@ -39,8 +41,9 @@ from attendance.salary import calculate_salary
 from bot.language import localize_message, private_language_context
 from bot.rate_limit import rate_limited
 from bot.delivery import destination, private_responses
+from bot import admin_portal
 from attendance.leave_message import validate_leave_workday, parse_leave_template
-from bot.line_ui import language_settings_message, terms_of_use_message, response_card_message
+from bot.line_ui import language_settings_message, terms_of_use_message, response_card_message, portal_menu_message
 from database.google_sheets import set_user_language, save_account_authorization
 
 from bot.commands import (
@@ -111,6 +114,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     try:
         from bot.rich_menu import setup_rich_menu
         setup_rich_menu()
+        setup_rich_menu(admin=True)
     except Exception as error:
         print("LIFESPAN RICH MENU INIT ERROR:", repr(error))
 
@@ -188,9 +192,10 @@ def reply_to_line(reply_token: str, message: str | FlexMessage):
         # Group/room tokens would post publicly; push only to the sender.
         return push_to_line(target.user_id, message) if target.user_id else False
     try:
-        if isinstance(message, str):
-            message = response_card_message(message)
-        message = localize_message(message)
+        if not isinstance(message, DailyReportText):
+            if isinstance(message, str):
+                message = response_card_message(message)
+            message = localize_message(message)
         with ApiClient(configuration) as api_client:
             messaging_api = MessagingApi(api_client)
 
@@ -219,9 +224,10 @@ def push_to_line(user_id: str, message: str | FlexMessage) -> bool:
     if not user_id or not user_id.startswith("U"):
         return False
     try:
-        if isinstance(message, str):
-            message = response_card_message(message)
-        message = localize_message(message, user_id)
+        if not isinstance(message, DailyReportText):
+            if isinstance(message, str):
+                message = response_card_message(message)
+            message = localize_message(message, user_id)
         with ApiClient(configuration) as api_client:
             messaging_api = MessagingApi(api_client)
             messaging_api.push_message(
@@ -427,6 +433,14 @@ def handle_follow(event):
     if not user_id:
         return
     try:
+        try:
+            from bot.rich_menu import sync_user_menu
+            sync_user_menu(user_id, force=True)
+        except Exception as error:
+            print("FOLLOW MENU SYNC ERROR:", type(error).__name__)
+        if is_admin_user(user_id):
+            reply_to_line(event.reply_token, admin_portal.portal_message())
+            return
         ident = identify_or_register_student(event)
         student = ident.student
         display_name = ident.display_name or get_line_display_name(user_id)
@@ -468,6 +482,49 @@ def handle_message(event):
         reply_to_line(event.reply_token, language_settings_message())
         return
 
+    try:
+        from bot.rich_menu import sync_user_menu
+        sync_user_menu(user_id)
+    except Exception as error:
+        print("USER MENU SYNC ERROR:", type(error).__name__)
+    requested_command = normalize_command(text)
+    if is_admin_user(user_id):
+        if requested_command in {"hello", "start", "init", "menu", "help", "helpcenter", "tickets", "leaverequest", "request"}:
+            action_name = "admin_tickets" if requested_command in {"helpcenter", "tickets"} else "admin_attendance" if requested_command in {"leaverequest", "request"} else "admin_portal"
+            try:
+                reply_to_line(event.reply_token, admin_portal.handle_postback({"action": [action_name]}, user_id))
+            except (ValueError, RuntimeError) as error:
+                reply_to_line(event.reply_token, str(error))
+            return
+        if requested_command in {"timeout", "schedule", "calendar"}:
+            try:
+                tokens = text.split()
+                selected_day = date.fromisoformat(tokens[1]) if len(tokens) > 1 else _today_taipei()
+                action_data = {"action": ["admin_timeout"], "date": [selected_day.isoformat()]}
+                if len(tokens) > 2:
+                    action_data["action"] = ["admin_timeout_preview"]
+                    action_data["returned"] = [tokens[2]]
+                reply_to_line(event.reply_token, admin_portal.handle_postback(action_data, user_id))
+            except (ValueError, RuntimeError) as error:
+                reply_to_line(event.reply_token, str(error))
+            return
+        if requested_command == "adminfind":
+            query = text.partition(" ")[2].strip()
+            search_day = _today_taipei()
+            try:
+                first, separator, remaining = query.partition(" ")
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", first):
+                    search_day = date.fromisoformat(first)
+                    query = remaining.strip()
+                reply_to_line(event.reply_token, admin_portal.students_message(search_day, query=query))
+            except (ValueError, RuntimeError) as error:
+                reply_to_line(event.reply_token, str(error))
+            return
+
+    if requested_command == "menu":
+        reply_to_line(event.reply_token, portal_menu_message())
+        return
+
     student = None
     was_registered = False
     if user_id:
@@ -477,7 +534,7 @@ def handle_message(event):
         except Exception as error:
             print("STUDENT LOOKUP ERROR:", repr(error))
 
-        if not was_registered:
+        if not was_registered and not is_admin_user(user_id):
             try:
                 ident = identify_or_register_student(event)
                 student = ident.student
@@ -513,7 +570,7 @@ def handle_message(event):
     if requested_command in {"hello", "start", "init"} or (
         requested_command == "help" and not is_admin_user(user_id)
     ):
-        reply_to_line(event.reply_token, welcome_message(student=student))
+        reply_to_line(event.reply_token, admin_portal.portal_message() if is_admin_user(user_id) else welcome_message(student=student))
         return
 
     is_private_chat = getattr(event.source, "type", "") == "user"
@@ -760,6 +817,22 @@ def handle_postback(event):
     group_id = getattr(event.source, "group_id", None)
     room_id = getattr(event.source, "room_id", None)
 
+    if is_admin_user(user_id) and action in {"richmenu_help", "richmenu_leave_request", "richmenu_schedule"}:
+        action = {"richmenu_help": "admin_tickets", "richmenu_leave_request": "admin_attendance", "richmenu_schedule": "admin_timeout"}[action]
+        data = {"action": [action]}
+    if action.startswith("admin_"):
+        try:
+            raw_params = getattr(event.postback, "params", None)
+            params = raw_params.to_dict() if hasattr(raw_params, "to_dict") else raw_params if isinstance(raw_params, dict) else {}
+            msg = admin_portal.handle_postback(data, user_id, params=params, notify=push_to_line)
+            reply_to_line(event.reply_token, msg)
+        except (ValueError, RuntimeError, KeyError) as error:
+            reply_to_line(event.reply_token, str(error))
+        except Exception as error:
+            print("ADMIN PORTAL ERROR:", type(error).__name__)
+            reply_to_line(event.reply_token, "The admin request could not be completed. Refresh the card and try again.")
+        return
+
     if action in {"language_settings", "set_language"}:
         if getattr(event.source, "type", "") != "user" or not user_id:
             reply_to_line(event.reply_token, "Please change your language in a private chat with the bot.")
@@ -779,7 +852,7 @@ def handle_postback(event):
 
     if action in {"help", "hello"}:
         student = resolve_student_from_event(event)
-        reply_to_line(event.reply_token, welcome_message(student=student))
+        reply_to_line(event.reply_token, admin_portal.portal_message() if is_admin_user(user_id) else welcome_message(student=student))
         return
 
     if action == "view_terms":

@@ -48,7 +48,7 @@ def generate_daily_report(report_date: date | None = None) -> str:
         )
         for row in latest_by_student.values()
     ]
-    return build_report(
+    report = build_report(
         report_date=target_date,
         total_students=expected_count,
         records=records,

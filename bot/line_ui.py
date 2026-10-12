@@ -940,12 +940,12 @@ def welcome_message(
                         ),
                     ],
                 },
-                _stat_row("My Attendance", "/attendance", bold=False, margin="sm"),
-                _stat_row("Leave History", "/leaves", bold=False, margin="xs"),
-                _stat_row("Salary Inquiry", "/salary", bold=False, margin="xs"),
-                _stat_row("Work Schedule", "/schedule", bold=False, margin="xs"),
-                _stat_row("Leave Request", "/leaverequest", bold=False, margin="xs"),
-                _stat_row("Help Center", "/ticket", bold=False, margin="xs"),
+                _button("My Attendance", "action=richmenu_attendance", margin="sm"),
+                _button("Leave History", "action=richmenu_leave_history", margin="xs"),
+                _button("Salary Inquiry", "action=richmenu_salary", margin="xs"),
+                _button("Work Schedule", "action=richmenu_schedule", margin="xs"),
+                _button("Leave Request", "action=richmenu_leave_request", margin="xs"),
+                _button("Help Center", "action=richmenu_help", margin="xs"),
                 _button("Language / 語言", "action=language_settings", margin="md"),
                 _button("Authorize", "action=authorize_account", color=DEDUCTION_RED, margin="md"),
             ],
@@ -1160,12 +1160,12 @@ def terms_agreement_confirmed_message(
                         _stat_row("Status", "Verified & Connected", margin="xs", label_flex=4, value_flex=4),
                     ],
                 },
-                _stat_row("My Attendance", "/attendance", bold=False, margin="sm"),
-                _stat_row("Leave History", "/leaves", bold=False, margin="xs"),
-                _stat_row("Salary Inquiry", "/salary", bold=False, margin="xs"),
-                _stat_row("Work Schedule", "/schedule", bold=False, margin="xs"),
-                _stat_row("Leave Request", "/leaverequest", bold=False, margin="xs"),
-                _stat_row("Help Center", "/ticket", bold=False, margin="xs"),
+                _button("My Attendance", "action=richmenu_attendance", margin="sm"),
+                _button("Leave History", "action=richmenu_leave_history", margin="xs"),
+                _button("Salary Inquiry", "action=richmenu_salary", margin="xs"),
+                _button("Work Schedule", "action=richmenu_schedule", margin="xs"),
+                _button("Leave Request", "action=richmenu_leave_request", margin="xs"),
+                _button("Help Center", "action=richmenu_help", margin="xs"),
                 _button("Language / 語言", "action=language_settings", margin="md"),
             ],
         },
@@ -1205,6 +1205,7 @@ def language_settings_message() -> FlexMessage:
 
 def response_card_message(text: str) -> FlexMessage:
     """Format plain responses as readable cards, preserving all supplied text."""
+    title = "Invalid Leave" if "Leave can only be filed on a scheduled workday." in text else "CSIE Student"
     sections = []
     for paragraph in text.split("\n\n"):
         if paragraph:
@@ -1220,10 +1221,26 @@ def response_card_message(text: str) -> FlexMessage:
     bubbles = [{
         "type": "bubble", "size": "mega",
         "body": {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "paddingAll": "16px", "contents": [
-            {"type": "text", "text": "CSIE Student", "weight": "bold", "size": "lg", "color": DARK_GREEN, "wrap": True},
+            {"type": "text", "text": title, "weight": "bold", "size": "lg", "color": DARK_GREEN, "wrap": True},
             {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
             *[{"type": "text", "text": section, "size": "sm", "color": LABEL_TEXT, "wrap": True, "margin": "md"} for section in page],
         ]},
     } for page in pages]
     contents = bubbles[0] if len(bubbles) == 1 else {"type": "carousel", "contents": bubbles}
-    return FlexMessage(alt_text="CSIE Student: " + (text[:280] or "Notification"), contents=FlexContainer.from_dict(contents))
+    return FlexMessage(alt_text=title + ": " + (text[:280] or "Notification"), contents=FlexContainer.from_dict(contents))
+
+
+def portal_menu_message() -> FlexMessage:
+    """Persistent in-chat navigation for clients without a rich menu."""
+    return FlexMessage(alt_text="CSIE Student: Portal Menu", contents=FlexContainer.from_dict({
+        "type": "bubble", "size": "mega",
+        "body": {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "paddingAll": "16px", "contents": [
+            {"type": "text", "text": "CSIE Student", "weight": "bold", "size": "lg", "color": DARK_GREEN, "wrap": True},
+            {"type": "text", "text": "Portal Menu", "size": "sm", "color": MUTED_TEXT, "margin": "xs"},
+            *[_button(label, f"action={action}", margin="sm") for label, action in [
+                ("My Attendance", "richmenu_attendance"), ("Salary Inquiry", "richmenu_salary"),
+                ("Work Schedule", "richmenu_schedule"), ("Leave History", "richmenu_leave_history"),
+                ("Leave Request", "richmenu_leave_request"), ("Help Center", "richmenu_help"),
+            ]],
+        ]},
+    }))

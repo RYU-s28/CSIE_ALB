@@ -208,3 +208,43 @@ Annual Leave status label and report category, while preserving attendance
 percentage and the full eight-hour salary credit. Future-dated report entries
 are excluded from salary totals until their date arrives, just as future annual
 leave is excluded from month-to-date attendance.
+
+## Admin Portal in LINE
+
+Users in `ADMIN_LINE_USER_IDS` receive a separate per-user **CSIE Admin Portal**
+rich menu. **Attendance Status** replaces Leave Request, and **Help Center** opens
+the administrator ticket workspace. The default student rich menu stays separate.
+Admin tools do not require the administrator to have a Students row. Type `/menu`
+or `/start` to open the same clickable admin portal card on desktop or mobile.
+Students can also use `/menu` for the six student actions without a rich menu.
+
+Attendance Status shows daily totals directly from Monthly Report. View the daily
+roster report, select a student, choose a date, choose a status, then confirm the
+before/after preview. **Present / Remove Leave** restores a full attendance day;
+**Annual Leave · Paid** keeps 特休 paid. Leave on rest days is blocked. Changes
+update Attendance, Monthly Report, and the actor's audit log. Student lists and
+daily reports are paginated. `/adminfind [YYYY-MM-DD] <name-or-ID>` searches the
+roster in the selected date's editing workflow.
+
+Help Center lists open tickets. Open a ticket to read the student's request,
+choose **Correct Student Attendance**, and select the correction date and status.
+Attendance changes are recorded in the ticket's Admin Note with the audit ID.
+The ticket stays open until **Resolve Ticket → Confirm Resolve**. Resolved tickets
+can be reopened from their card. Resolution/reopening sends the student a private
+notification; recorded corrections appear in their normal attendance view.
+
+Every admin postback checks the sender's configured admin ID. Mutations require
+a signed ten-minute confirmation tied to that administrator and the current
+record snapshot. Stale, tampered, cross-account, and expired confirmations are
+rejected. A failed Monthly Report mirror is reported explicitly and does not
+automatically resolve the ticket; correct it before resolving.
+
+The generated admin menu asset is `assets/admin_rich_menu.png`; regenerate it on
+macOS with `swift scripts/render_admin_menu.swift assets/admin_rich_menu.png`.
+Deployment setup links the admin menu to configured admin user IDs. Admins must
+be friends with the bot for LINE to display their per-user menu.
+
+Daily attendance report text from `/report`, `/summary`, and scheduled reports
+retains its original Chinese plain-text format (date, 應到人數, 實到人數, and
+category lists). It bypasses card conversion and AI translation. Other portal
+and ticket replies still use cards.

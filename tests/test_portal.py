@@ -974,3 +974,312 @@ class TestPaidAnnualLeave(TestCase):
         ])
         self.assertIn("實到人數：1", report)
         self.assertIn("特休：1人", report)
+
+
+class TestAdminPortal(TestCase):
+    def setUp(self):
+        self.env = patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin", "LINE_CHANNEL_SECRET": "secret"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.day = date(2026, 10, 14)
+        self.student = {"student_id": "ST101", "name": "Student", "chinese_name": "學生"}
+        self.ticket = {"Ticket ID": "ABCD", "Student ID": "ST101", "LINE User ID": "Ustudent", "Status": "OPEN", "Message": "Please correct 2026-10-14 to sick leave.", "Admin Note": ""}
+
+    def data(self, action, **values):
+        from urllib.parse import parse_qs
+        from bot.admin_portal import action as build_action
+        return parse_qs(build_action(action, **values))
+
+    def preview(self, ticket=None, status="sick"):
+        from bot.admin_portal import preview_message
+        with patch("database.google_sheets.get_monthly_report_entries", return_value={self.day: "出席"}), patch(
+            "database.google_sheets.get_attendance_record", return_value=None
+        ), patch("database.google_sheets.get_ticket", return_value=self.ticket):
+            return preview_message("Uadmin", self.student, self.day, status, ticket)
+
+    def test_admin_portal_has_requested_six_actions(self):
+        from bot.admin_portal import portal_message
+        labels = [item["action"]["label"] for item in portal_message().contents.data["footer"]["contents"]]
+        self.assertIn("Attendance Status", labels)
+        self.assertIn("Help Center · Tickets", labels)
+        self.assertNotIn("Leave Request", labels)
+        self.assertEqual(len(labels), 6)
+
+    def test_every_admin_action_rejects_nonadmin(self):
+        from bot.admin_portal import handle_postback
+        for action in ("admin_tickets", "admin_ticket", "admin_attendance", "admin_student", "admin_preview", "admin_apply", "admin_ticket_commit"):
+            with self.subTest(action=action), patch("database.google_sheets.get_ticket") as read, patch("database.google_sheets.upsert_attendance_record") as write:
+                with self.assertRaisesRegex(ValueError, "administrators only"):
+                    handle_postback(self.data(action), "Ustudent")
+                read.assert_not_called()
+                write.assert_not_called()
+
+    def test_preview_does_not_mutate_database(self):
+        with patch("database.google_sheets.upsert_attendance_record") as write:
+            preview = self.preview()
+        self.assertEqual(preview.contents.data["footer"]["contents"][0]["action"]["label"], "Confirm Change")
+        write.assert_not_called()
+
+    def test_confirmed_change_updates_both_log_and_monthly_report(self):
+        from urllib.parse import parse_qs
+        from bot.admin_portal import handle_postback
+        data = parse_qs(self.preview(ticket="ABCD").contents.data["footer"]["contents"][0]["action"]["data"])
+        with patch("database.google_sheets.find_student_by_id", return_value=self.student), patch(
+            "database.google_sheets.get_monthly_report_entries", return_value={self.day: "出席"}
+        ), patch("database.google_sheets.get_attendance_record", return_value=None), patch(
+            "database.google_sheets.get_ticket", return_value=self.ticket
+        ), patch("database.google_sheets.upsert_attendance_record", return_value={"action_id": "AUDIT1"}) as log, patch(
+            "database.google_sheets.update_monthly_report_cell", return_value=True
+        ) as grid, patch("bot.admin_portal.save_ticket_note") as note, patch("database.google_sheets.update_ticket") as close:
+            result = handle_postback(data, "Uadmin")
+        self.assertIn("Attendance Updated", result.alt_text)
+        self.assertEqual(log.call_args.args[3], "病假")
+        self.assertEqual(log.call_args.args[4], "Uadmin")
+        grid.assert_called_once_with("ST101", self.day, "病假")
+        self.assertIn("AUDIT1", note.call_args.args[1])
+        close.assert_not_called()
+
+    def test_changed_record_blocks_old_confirmation(self):
+        from urllib.parse import parse_qs
+        from bot.admin_portal import handle_postback
+        data = parse_qs(self.preview().contents.data["footer"]["contents"][0]["action"]["data"])
+        with patch("database.google_sheets.find_student_by_id", return_value=self.student), patch(
+            "database.google_sheets.get_monthly_report_entries", return_value={self.day: "事假"}
+        ), patch("database.google_sheets.get_attendance_record", return_value=None), patch("database.google_sheets.upsert_attendance_record") as write:
+            with self.assertRaisesRegex(ValueError, "changed since"):
+                handle_postback(data, "Uadmin")
+            write.assert_not_called()
+
+    def test_tampered_expired_and_cross_admin_confirmations_rejected(self):
+        from urllib.parse import parse_qs
+        from bot.admin_portal import verify_action
+        data = parse_qs(self.preview().contents.data["footer"]["contents"][0]["action"]["data"])
+        with self.assertRaises(ValueError):
+            verify_action("Uotheradmin", data)
+        tampered = {**data, "status": ["present"]}
+        with self.assertRaises(ValueError):
+            verify_action("Uadmin", tampered)
+        with patch("bot.admin_portal.time.time", return_value=int(data["expires"][0]) + 1):
+            with self.assertRaises(ValueError):
+                verify_action("Uadmin", data)
+
+    def test_manual_remove_leave_sets_present(self):
+        from bot.admin_portal import preview_message, handle_postback
+        from urllib.parse import parse_qs
+        with patch("database.google_sheets.get_monthly_report_entries", return_value={self.day: "病假"}), patch("database.google_sheets.get_attendance_record", return_value=None):
+            card = preview_message("Uadmin", self.student, self.day, "present", None)
+            data = parse_qs(card.contents.data["footer"]["contents"][0]["action"]["data"])
+            with patch("database.google_sheets.find_student_by_id", return_value=self.student), patch(
+                "database.google_sheets.upsert_attendance_record", return_value={"action_id": "AUDIT"}
+            ) as log, patch("database.google_sheets.update_monthly_report_cell", return_value=True) as grid:
+                handle_postback(data, "Uadmin")
+            self.assertEqual(log.call_args.args[3], "出席")
+            grid.assert_called_once_with("ST101", self.day, "出席")
+
+    def test_partial_report_failure_does_not_resolve_ticket(self):
+        from bot.admin_portal import handle_postback
+        from urllib.parse import parse_qs
+        data = parse_qs(self.preview(ticket="ABCD").contents.data["footer"]["contents"][0]["action"]["data"])
+        with patch("database.google_sheets.find_student_by_id", return_value=self.student), patch(
+            "database.google_sheets.get_monthly_report_entries", return_value={self.day: "出席"}
+        ), patch("database.google_sheets.get_attendance_record", return_value=None), patch("database.google_sheets.get_ticket", return_value=self.ticket), patch(
+            "database.google_sheets.upsert_attendance_record", return_value={"action_id": "AUDIT"}
+        ), patch("database.google_sheets.update_monthly_report_cell", return_value=False), patch("database.google_sheets.update_ticket") as close:
+            with self.assertRaisesRegex(RuntimeError, "Monthly Report"):
+                handle_postback(data, "Uadmin")
+            close.assert_not_called()
+
+    def test_ticket_resolution_is_confirmed_and_notifies_student(self):
+        from bot.admin_portal import handle_postback
+        from urllib.parse import parse_qs
+        with patch("database.google_sheets.get_ticket", return_value=self.ticket), patch("database.google_sheets.find_student_by_id", return_value=self.student), patch("database.google_sheets.update_ticket", return_value=True) as update:
+            preview = handle_postback(self.data("admin_ticket_resolve", ticket="ABCD"), "Uadmin")
+            update.assert_not_called()
+            data = parse_qs(preview.contents.data["footer"]["contents"][0]["action"]["data"])
+            notice = MagicMock()
+            result = handle_postback(data, "Uadmin", notify=notice)
+            update.assert_called_once()
+            self.assertTrue(update.call_args.kwargs["close"])
+            self.assertIn("ABCD", notice.call_args.args[1])
+            self.assertEqual(notice.call_args.args[0], "Ustudent")
+
+    def test_closed_ticket_cannot_edit_another_student(self):
+        from bot.admin_portal import handle_postback
+        wrong_ticket = {**self.ticket, "Student ID": "ST102"}
+        with patch("database.google_sheets.find_student_by_id", return_value=self.student), patch("database.google_sheets.get_ticket", return_value=wrong_ticket):
+            with self.assertRaisesRegex(ValueError, "different student"):
+                handle_postback(self.data("admin_student", student="ST101", ticket="ABCD"), "Uadmin")
+
+    def test_date_picker_selects_requested_date(self):
+        from bot.admin_portal import handle_postback
+        selected = date(2026, 10, 23)
+        with patch("database.google_sheets.find_student_by_id", return_value=self.student), patch("database.google_sheets.get_monthly_report_entries", return_value={selected: "病假"}):
+            card = handle_postback(self.data("admin_student", student="ST101"), "Uadmin", params={"date": selected.isoformat()})
+        import json
+        self.assertIn(selected.isoformat(), json.dumps(card.contents.data))
+
+    def test_report_pagination_and_paid_leave_summary(self):
+        from bot.admin_portal import daily_report_message, attendance_message
+        rows = [{"student_id": str(index), "name": "Student", "type": "特休"} for index in range(12)]
+        with patch("database.google_sheets.get_daily_monthly_report", return_value=rows):
+            first = daily_report_message(self.day)
+            second = daily_report_message(self.day, page=1)
+            summary = attendance_message(self.day)
+        import json
+        self.assertIn("Next Page", json.dumps(first.contents.data))
+        self.assertIn("Previous Page", json.dumps(second.contents.data))
+        stat_rows = summary.contents.data["body"]["contents"]
+        values = {row["contents"][0]["text"]: row["contents"][1]["text"] for row in stat_rows if row.get("layout") == "horizontal"}
+        self.assertEqual(values["Present / Paid Leave"], "12")
+        self.assertEqual(values["Absences"], "0")
+
+
+class TestAdminRichMenu(TestCase):
+    def test_admin_tile_names_and_routes(self):
+        menu = build_rich_menu_request(admin=True)
+        self.assertEqual(menu.name, "CSIE Admin Portal")
+        self.assertEqual(menu.areas[4].action.label, "Attendance Status")
+        self.assertEqual(menu.areas[4].action.data, "action=admin_attendance")
+        self.assertEqual(menu.areas[5].action.data, "action=admin_tickets")
+        student = build_rich_menu_request()
+        self.assertEqual(student.areas[4].action.label, "Leave Request")
+
+    def test_admin_menu_is_linked_per_user_without_changing_default(self):
+        import bot.rich_menu as menus
+        from types import SimpleNamespace
+        api = MagicMock()
+        api.get_rich_menu_list.return_value.richmenus = [SimpleNamespace(name="CSIE Admin Portal (hash)", size=SimpleNamespace(width=2500, height=1686), rich_menu_id="ADMIN_MENU")]
+        with patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin"}), patch.object(menus, "get_image_hash", return_value="hash"), patch.object(menus, "ApiClient"), patch.object(menus, "MessagingApi", return_value=api), patch.object(menus, "_ADMIN_MENU_ID", None):
+            self.assertEqual(menus.setup_rich_menu(admin=True), "ADMIN_MENU")
+            api.link_rich_menu_id_to_user.assert_called_once_with("Uadmin", "ADMIN_MENU")
+            api.set_default_rich_menu.assert_not_called()
+            api.delete_rich_menu.assert_not_called()
+
+    def test_removed_admin_loses_per_user_admin_menu(self):
+        import bot.rich_menu as menus
+        api = MagicMock()
+        api.get_rich_menu_id_of_user.return_value.rich_menu_id = "ADMIN_MENU"
+        with patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": ""}), patch.object(menus, "_ADMIN_MENU_ID", "ADMIN_MENU"), patch.object(menus, "_MENU_ROLE_CACHE", {}), patch.object(menus, "ApiClient"), patch.object(menus, "MessagingApi", return_value=api):
+            menus.sync_user_menu("Uformeradmin")
+            api.unlink_rich_menu_id_from_user.assert_called_once_with("Uformeradmin")
+
+    def test_daily_report_reads_month_block_once_for_all_students(self):
+        from database.google_sheets import get_daily_monthly_report
+        from attendance.report import StudentDisplay
+        sheet = MagicMock()
+        sheet.get_all_values.return_value = [
+            ["", "", "October 2026"], ["", "", "1", "2", "3", "4", "7"],
+            ["ST101", "One", "", "半天", "病假", "遲到", "特休"],
+            ["ST102", "Two", "", "", "", "", "事假"],
+        ]
+        students = {sid: StudentDisplay(student_id=sid, display_name=sid) for sid in ("ST101", "ST102")}
+        with patch("database.google_sheets._get_monthly_report_sheet", return_value=sheet), patch("database.google_sheets.get_report_students", return_value=(students, 2)):
+            rows = get_daily_monthly_report(date(2026, 10, 7))
+        self.assertEqual([row["type"] for row in rows], ["特休", "事假"])
+        sheet.get_all_values.assert_called_once()
+
+
+class TestAdminSafeguards(TestCase):
+    setUp = TestAdminPortal.setUp
+    data = TestAdminPortal.data
+    preview = TestAdminPortal.preview
+
+    def test_rest_day_leave_preview_rejected(self):
+        from bot.admin_portal import preview_message
+        with self.assertRaisesRegex(ValueError, "rest day"):
+            preview_message("Uadmin", self.student, date(2026, 10, 12), "sick", None)
+
+    def test_closed_ticket_blocks_correction(self):
+        from bot.admin_portal import preview_message
+        with patch("database.google_sheets.get_monthly_report_entries", return_value={self.day: "出席"}), patch(
+            "database.google_sheets.get_attendance_record", return_value=None
+        ), patch("database.google_sheets.get_ticket", return_value={**self.ticket, "Status": "CLOSED"}):
+            with self.assertRaisesRegex(ValueError, "closed"):
+                preview_message("Uadmin", self.student, self.day, "sick", "ABCD")
+
+    def test_paid_annual_leave_preview_preserves_category(self):
+        import json
+        preview = self.preview(status="annual")
+        self.assertIn("Annual Leave", json.dumps(preview.contents.data))
+        self.assertIn("Paid", json.dumps(preview.contents.data))
+
+    def test_ticket_change_blocks_stale_resolution(self):
+        from bot.admin_portal import handle_postback
+        from urllib.parse import parse_qs
+        with patch("database.google_sheets.get_ticket", return_value=self.ticket):
+            preview = handle_postback(self.data("admin_ticket_resolve", ticket="ABCD"), "Uadmin")
+        data = parse_qs(preview.contents.data["footer"]["contents"][0]["action"]["data"])
+        with patch("database.google_sheets.get_ticket", return_value={**self.ticket, "Admin Note": "Changed by another admin"}), patch(
+            "database.google_sheets.update_ticket"
+        ) as write:
+            with self.assertRaisesRegex(ValueError, "changed"):
+                handle_postback(data, "Uadmin")
+            write.assert_not_called()
+
+    def test_student_portal_has_clickable_six_actions(self):
+        from bot.line_ui import portal_menu_message
+        buttons = [row for row in portal_menu_message().contents.data["body"]["contents"] if row.get("type") == "button"]
+        self.assertEqual(len(buttons), 6)
+        labels = [button["action"]["label"] for button in buttons]
+        self.assertIn("Leave Request", labels)
+        self.assertNotIn("Attendance Status", labels)
+
+    def test_ticket_resolution_note_and_actor_are_stored(self):
+        from database.google_sheets import update_ticket
+        sheet = MagicMock()
+        sheet.get_all_values.return_value = [["Ticket ID"], ["ABCD", "", "ST101", "Ustudent", "Request", "OPEN"]]
+        with patch("database.google_sheets._ensure_named_sheet", return_value=sheet):
+            self.assertTrue(update_ticket("ABCD", "Uadmin", close=True, note="Attendance corrected."))
+        values = sheet.update.call_args.kwargs["values"][0]
+        self.assertEqual(values[0:2], ["CLOSED", "Uadmin"])
+        self.assertTrue(values[2])
+        self.assertEqual(values[3], "Attendance corrected.")
+
+
+class TestAdminReportIdentityTranslation(TestCase):
+    def test_other_students_names_are_protected_in_admin_reports(self):
+        from bot.language import localize_message
+        from attendance.report import StudentDisplay
+        class FakeMessage:
+            def to_dict(self):
+                return {"type": "flex", "altText": "Report", "contents": {"type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "ST101 · 奎姐兒\n病假"}]}}}
+        def translate(texts, language):
+            self.assertFalse(any("奎姐兒" in text or "ST101" in text for text in texts))
+            return tuple(text.replace("病假", "Sick Leave") for text in texts)
+        with patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin"}), patch("database.google_sheets.get_user_language", return_value="en"), patch(
+            "database.google_sheets.find_student_by_line_user_id", return_value=None
+        ), patch("database.google_sheets.get_report_students", return_value=({"ST101": StudentDisplay("ST101", "奎姐兒")}, 1)), patch(
+            "bot.language.translate_texts", side_effect=translate
+        ), patch("linebot.v3.messaging.FlexMessage.from_dict", side_effect=lambda value: value, create=True):
+            result = localize_message(FakeMessage(), "Uadmin")
+        self.assertEqual(result["contents"]["body"]["contents"][0]["text"], "ST101 · 奎姐兒\nSick Leave")
+
+
+class TestDailyReportPlainText(TestCase):
+    def test_generated_report_has_plain_text_marker(self):
+        from attendance.report import build_report, DailyReportText
+        report = build_report(report_date=date(2026, 10, 9), total_students=41, expected_students=41, records=[])
+        self.assertIsInstance(report, DailyReportText)
+        self.assertEqual(report, "「2026/10/09」（禮拜五）\n\n應到人數：41\n實到人數：41")
+
+    def test_report_reply_and_push_bypass_cards_and_translation(self):
+        from attendance.report import DailyReportText
+        from app import reply_to_line, push_to_line
+        from bot.delivery import destination, ReplyDestination
+        from types import SimpleNamespace
+        report = DailyReportText("「2026/10/09」（禮拜五）\n\n應到人數：41\n實到人數：41")
+        token = destination.set(ReplyDestination("Uadmin", True))
+        try:
+            with patch("app.ApiClient"), patch("app.MessagingApi") as api, patch("app.response_card_message") as card, patch("app.localize_message") as translate, patch(
+                "app.ReplyMessageRequest", side_effect=lambda **args: SimpleNamespace(**args)
+            ), patch("app.PushMessageRequest", side_effect=lambda **args: SimpleNamespace(**args)), patch("app.TextMessage", side_effect=lambda text: SimpleNamespace(text=text)):
+                self.assertTrue(reply_to_line("PRIVATE_TOKEN", report))
+                self.assertTrue(push_to_line("Uadmin", report))
+                replied = api.return_value.reply_message.call_args.kwargs["reply_message_request"]
+                pushed = api.return_value.push_message.call_args.kwargs["push_message_request"]
+                self.assertEqual(replied.messages[0].text, report)
+                self.assertEqual(pushed.messages[0].text, report)
+                card.assert_not_called()
+                translate.assert_not_called()
+        finally:
+            destination.reset(token)

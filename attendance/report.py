@@ -8,6 +8,10 @@ from datetime import date
 from .attendance import AttendanceRecord
 
 
+class DailyReportText(str):
+    """Daily report text that must keep its original LINE text format."""
+
+
 STATUS_LABELS = {
     "personal_leave": "事假",
     "sick_leave": "病假",
@@ -115,4 +119,4 @@ def build_report(
             else:
                 lines.append(f"@{record.student_id}")
 
-    return "\n".join(lines)
+    return DailyReportText("\n".join(lines))

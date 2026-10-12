@@ -164,13 +164,16 @@ def _report_data(target_date: date, *, summary: bool) -> str:
     del summary
     students, expected = google_sheets.get_report_students()
     records = _records_for_date(target_date)
-    return build_report(
+    report = build_report(
         report_date=target_date,
         total_students=expected,
         records=records,
         students=students,
         expected_students=expected,
     )
+    from attendance.time_out import save_morning
+    save_morning(target_date, report, records, students, expected)
+    return report
 
 
 def _run_admin_command(tokens: list[str], actor: str) -> str:
@@ -307,10 +310,8 @@ def _run_admin_command(tokens: list[str], actor: str) -> str:
                 ticket = google_sheets.get_ticket(ticket_id)
                 if ticket is None:
                     return "Ticket not found."
-                return (
-                    f"Ticket #{ticket['Ticket ID']}\nStudent: {ticket['Student ID']}\n"
-                    f"Status: {ticket['Status']}\n\nRequest:\n{ticket['Message']}"
-                )
+                from bot.admin_portal import ticket_message
+                return ticket_message(ticket)
             updated = google_sheets.update_ticket(
                 ticket_id, actor, close=action == "close",
             )

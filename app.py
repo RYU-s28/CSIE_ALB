@@ -23,6 +23,7 @@ from linebot.v3.messaging import (
     TextMessage,
 )
 from linebot.v3.webhooks import (
+    FollowEvent,
     MessageEvent,
     PostbackEvent,
     TextMessageContent,
@@ -43,11 +44,13 @@ from bot.commands import (
 )
 from bot.line_ui import (
     help_center_message,
+    initialization_message,
     leave_history_message,
     leave_request_menu_message,
     my_attendance_message,
     salary_breakdown_message,
     salary_overview_message,
+    terms_agreement_confirmed_message,
     welcome_message,
     work_schedule_message,
 )
@@ -375,6 +378,45 @@ def identify_or_register_student(event) -> StudentIdentification:
     )
 
 
+def resolve_student_from_event(event) -> dict[str, object] | None:
+    """Resolve the active student for event, automatically connecting if not yet linked."""
+    user_id = str(getattr(event.source, "user_id", None) or "").strip() or None
+    if not user_id:
+        return None
+    try:
+        student = find_student_by_line_user_id(user_id)
+        if student:
+            return student
+        # Automatically connect LINE display name with LINE ID in database
+        ident = identify_or_register_student(event)
+        return ident.student
+    except Exception as error:
+        print("RESOLVE STUDENT ERROR:", repr(error))
+        return None
+
+
+@handler.add(FollowEvent)
+def handle_follow(event):
+    """Handle new friend follow event with automatic initialization."""
+    user_id = str(getattr(event.source, "user_id", None) or "").strip()
+    if not user_id:
+        return
+    try:
+        ident = identify_or_register_student(event)
+        student = ident.student
+        display_name = ident.display_name or get_line_display_name(user_id)
+        msg = initialization_message(
+            student=student,
+            display_name=display_name,
+            is_registered=(ident.status == "registered"),
+            error_status=ident.status if not student else None,
+        )
+        reply_to_line(event.reply_token, msg)
+    except Exception as error:
+        print("FOLLOW EVENT INIT ERROR:", repr(error))
+        reply_to_line(event.reply_token, welcome_message())
+
+
 @handler.add(
     MessageEvent,
     message=TextMessageContent,
@@ -383,13 +425,7 @@ def handle_message(event):
     text = event.message.text or ""
 
     user_id = str(getattr(event.source, "user_id", None) or "").strip() or None
-    requested_command = normalize_command(text)
-    if requested_command == "hello" or (
-        requested_command == "help" and not is_admin_user(user_id)
-    ):
-        reply_to_line(event.reply_token, welcome_message())
-        return
-
+    is_private_chat = getattr(event.source, "type", "") == "user"
     group_id = getattr(
         event.source,
         "group_id",
@@ -400,14 +436,53 @@ def handle_message(event):
     print("GROUP:", group_id)
     print("MESSAGE:", text)
 
-    command_student_id = None
+    student = None
+    was_registered = False
     if user_id:
         try:
             student = find_student_by_line_user_id(user_id)
-            if student:
-                command_student_id = str(student["student_id"])
+            was_registered = (student is not None)
         except Exception as error:
             print("STUDENT LOOKUP ERROR:", repr(error))
+
+        if not was_registered:
+            try:
+                ident = identify_or_register_student(event)
+                student = ident.student
+                if is_private_chat:
+                    if student and ident.status == "registered":
+                        # Newly auto-connected upon first private chat: send initialization card with recognized identity & terms
+                        reply_to_line(
+                            event.reply_token,
+                            initialization_message(
+                                student=student,
+                                display_name=ident.display_name,
+                                is_registered=True,
+                            ),
+                        )
+                        return
+                    elif not student:
+                        # Unmatched in database
+                        reply_to_line(
+                            event.reply_token,
+                            initialization_message(
+                                student=None,
+                                display_name=ident.display_name,
+                                error_status=ident.status,
+                            ),
+                        )
+                        return
+            except Exception as error:
+                print("AUTO IDENTIFY ON CHAT ERROR:", repr(error))
+
+    command_student_id = str(student["student_id"]) if student else None
+
+    requested_command = normalize_command(text)
+    if requested_command in {"hello", "start", "init"} or (
+        requested_command == "help" and not is_admin_user(user_id)
+    ):
+        reply_to_line(event.reply_token, welcome_message(student=student))
+        return
 
     is_private_chat = getattr(event.source, "type", "") == "user"
     try:
@@ -634,25 +709,33 @@ def handle_postback(event):
     group_id = getattr(event.source, "group_id", None)
     room_id = getattr(event.source, "room_id", None)
 
-    if action == "help":
-        reply_to_line(event.reply_token, welcome_message())
+    if action in {"help", "hello"}:
+        student = resolve_student_from_event(event)
+        reply_to_line(event.reply_token, welcome_message(student=student))
+        return
+
+    if action == "agree_terms":
+        student = resolve_student_from_event(event)
+        if student:
+            reply_to_line(event.reply_token, terms_agreement_confirmed_message(student))
+        else:
+            display_name = get_line_display_name(user_id) if user_id else None
+            reply_to_line(
+                event.reply_token,
+                initialization_message(student=None, display_name=display_name, error_status="unmatched"),
+            )
         return
 
     if action == "richmenu_attendance":
-        student_id = None
-        if user_id:
-            try:
-                student = find_student_by_line_user_id(user_id)
-                if student:
-                    student_id = str(student["student_id"])
-            except Exception as error:
-                print("STUDENT LOOKUP ERROR:", repr(error))
-        if not student_id:
+        student = resolve_student_from_event(event)
+        if not student:
+            display_name = get_line_display_name(user_id) if user_id else None
             reply_to_line(
                 event.reply_token,
-                "Your LINE account is not linked to a student record. Please contact an administrator.",
+                initialization_message(student=None, display_name=display_name, error_status="unmatched"),
             )
             return
+        student_id = str(student["student_id"])
         target_month = _today_taipei().replace(day=1)
         summary = get_student_attendance_summary(student_id, target_month)
         msg = my_attendance_message(summary, month_label=target_month.strftime("%B %Y"))
@@ -660,40 +743,30 @@ def handle_postback(event):
         return
 
     if action == "richmenu_leave_history":
-        student_id = None
-        if user_id:
-            try:
-                student = find_student_by_line_user_id(user_id)
-                if student:
-                    student_id = str(student["student_id"])
-            except Exception as error:
-                print("STUDENT LOOKUP ERROR:", repr(error))
-        if not student_id:
+        student = resolve_student_from_event(event)
+        if not student:
+            display_name = get_line_display_name(user_id) if user_id else None
             reply_to_line(
                 event.reply_token,
-                "Your LINE account is not linked to a student record. Please contact an administrator.",
+                initialization_message(student=None, display_name=display_name, error_status="unmatched"),
             )
             return
+        student_id = str(student["student_id"])
         records = get_student_leave_records(student_id)
         msg = leave_history_message(records, month_label=_today_taipei().strftime("%B %Y"))
         reply_to_line(event.reply_token, msg)
         return
 
     if action == "richmenu_salary":
-        student_id = None
-        if user_id:
-            try:
-                student = find_student_by_line_user_id(user_id)
-                if student:
-                    student_id = str(student["student_id"])
-            except Exception as error:
-                print("STUDENT LOOKUP ERROR:", repr(error))
-        if not student_id:
+        student = resolve_student_from_event(event)
+        if not student:
+            display_name = get_line_display_name(user_id) if user_id else None
             reply_to_line(
                 event.reply_token,
-                "Your LINE account is not linked to a student record. Please contact an administrator.",
+                initialization_message(student=None, display_name=display_name, error_status="unmatched"),
             )
             return
+        student_id = str(student["student_id"])
         target_month = _today_taipei().replace(day=1)
         try:
             full_days, half_days = get_monthly_attendance_counts(student_id, target_month)
@@ -717,17 +790,11 @@ def handle_postback(event):
         return
 
     if action == "salary_breakdown":
-        student_id = None
-        if user_id:
-            try:
-                student = find_student_by_line_user_id(user_id)
-                if student:
-                    student_id = str(student["student_id"])
-            except Exception as error:
-                print("STUDENT LOOKUP ERROR:", repr(error))
-        if not student_id:
+        student = resolve_student_from_event(event)
+        if not student:
             reply_to_line(event.reply_token, "Student record not found.")
             return
+        student_id = str(student["student_id"])
         target_month = _today_taipei().replace(day=1)
         month_arg = data.get("month", [""])[0]
         if month_arg:
@@ -752,21 +819,17 @@ def handle_postback(event):
         return
 
     if action == "richmenu_leave_request":
-        student_name = None
-        if user_id:
-            student = find_student_by_line_user_id(user_id)
-            if student:
-                student_name = str(student.get("name", ""))
+        student = resolve_student_from_event(event)
+        student_name = str(student.get("name", "")) if student else None
         msg = leave_request_menu_message(student_name)
         reply_to_line(event.reply_token, msg)
         return
 
     if action == "richmenu_help":
         tickets = []
-        if user_id:
-            student = find_student_by_line_user_id(user_id)
-            if student:
-                tickets = get_student_tickets(str(student["student_id"]))
+        student = resolve_student_from_event(event)
+        if student:
+            tickets = get_student_tickets(str(student["student_id"]))
         msg = help_center_message(tickets)
         reply_to_line(event.reply_token, msg)
         return
@@ -795,14 +858,8 @@ def handle_postback(event):
         return
 
     if action == "statusme":
-        student_id = None
-        if user_id:
-            try:
-                student = find_student_by_line_user_id(user_id)
-                if student:
-                    student_id = str(student["student_id"])
-            except Exception as error:
-                print("STUDENT LOOKUP ERROR:", repr(error))
+        student = resolve_student_from_event(event)
+        student_id = str(student["student_id"]) if student else None
 
         try:
             response = handle_command(
@@ -832,14 +889,8 @@ def handle_postback(event):
         return
 
     if action == "salary":
-        student_id = None
-        if user_id:
-            try:
-                student = find_student_by_line_user_id(user_id)
-                if student:
-                    student_id = str(student["student_id"])
-            except Exception as error:
-                print("STUDENT LOOKUP ERROR:", repr(error))
+        student = resolve_student_from_event(event)
+        student_id = str(student["student_id"]) if student else None
 
         is_private = getattr(event.source, "type", "") == "user"
         try:

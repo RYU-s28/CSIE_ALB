@@ -827,11 +827,28 @@ def help_center_message(tickets: list[dict[str, str]] | None = None) -> FlexMess
 
 
 # ======================================================================
-# 7. Welcome Card (/hello) in Same Design
+# 7. Welcome & Initialization Cards in Same Design
 # ======================================================================
 
-def welcome_message() -> FlexMessage:
+def welcome_message(
+    student: dict[str, object] | None = None,
+    *,
+    display_name: str | None = None,
+) -> FlexMessage:
     """Build the welcome portal card shown for /hello matching the design."""
+    student_name = ""
+    student_id = ""
+    if student:
+        student_name = str(student.get("chinese_name") or student.get("name") or "").strip()
+        student_id = str(student.get("student_id") or "").strip()
+
+    is_recognized = bool(student_name and student_id)
+    badge_label = "Connected" if is_recognized else "Guest"
+    badge_bg = "#D7F2E9" if is_recognized else BADGE_BG
+    badge_color = "#176B5B" if is_recognized else BADGE_TEXT
+
+    welcome_title = f"Welcome, {student_name}!" if is_recognized else "Welcome to CSIE Attendance"
+
     bubble: dict[str, object] = {
         "type": "bubble",
         "size": "mega",
@@ -842,11 +859,20 @@ def welcome_message() -> FlexMessage:
             "paddingAll": "20px",
             "contents": [
                 {
-                    "type": "text",
-                    "text": "CSIE Student Portal",
-                    "weight": "bold",
-                    "size": "xl",
-                    "color": DARK_GREEN,
+                    "type": "box",
+                    "layout": "horizontal",
+                    "alignItems": "center",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "CSIE Student Portal",
+                            "weight": "bold",
+                            "size": "xl",
+                            "color": DARK_GREEN,
+                            "flex": 1,
+                        },
+                        _pill(badge_label, bg=badge_bg, color=badge_color),
+                    ],
                 },
                 {
                     "type": "text",
@@ -865,7 +891,7 @@ def welcome_message() -> FlexMessage:
                     "contents": [
                         {
                             "type": "text",
-                            "text": "Welcome to CSIE Attendance",
+                            "text": welcome_title,
                             "weight": "bold",
                             "size": "sm",
                             "color": DARK_GREEN,
@@ -881,6 +907,16 @@ def welcome_message() -> FlexMessage:
                             "wrap": True,
                             "margin": "xs",
                         },
+                        *(
+                            [
+                                {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
+                                _stat_row("Student Name", student_name, margin="sm", label_flex=4, value_flex=4),
+                                _stat_row("Student ID", student_id, margin="xs", label_flex=4, value_flex=4),
+                                _stat_row("Status", "Connected & Active", margin="xs", label_flex=4, value_flex=4),
+                            ]
+                            if is_recognized
+                            else []
+                        ),
                     ],
                 },
                 _stat_row("My Attendance", "/attendance", bold=False, margin="sm"),
@@ -896,6 +932,331 @@ def welcome_message() -> FlexMessage:
 
     return FlexMessage(
         alt_text="CSIE Student Portal: Attendance & Work Services",
+        contents=FlexContainer.from_dict(bubble),
+        quick_reply=QuickReply(
+            items=[
+                QuickReplyItem(action=PostbackAction(label="My Attendance", data="action=richmenu_attendance", display_text="My Attendance")),
+                QuickReplyItem(action=PostbackAction(label="Leave History", data="action=richmenu_leave_history", display_text="Leave History")),
+                QuickReplyItem(action=PostbackAction(label="Salary Inquiry", data="action=richmenu_salary", display_text="Salary Inquiry")),
+                QuickReplyItem(action=PostbackAction(label="Work Schedule", data="action=richmenu_schedule", display_text="Work Schedule")),
+                QuickReplyItem(action=PostbackAction(label="Leave Request", data="action=richmenu_leave_request", display_text="Leave Request")),
+                QuickReplyItem(action=PostbackAction(label="Help Center", data="action=richmenu_help", display_text="Help Center")),
+            ]
+        ),
+    )
+
+
+def initialization_message(
+    student: dict[str, object] | None = None,
+    *,
+    display_name: str | None = None,
+    is_registered: bool = False,
+    error_status: str | None = None,
+) -> FlexMessage:
+    """Build the English initialization card with terms and student recognition."""
+    student_name = ""
+    student_id = ""
+    if student:
+        student_name = str(student.get("chinese_name") or student.get("name") or "").strip()
+        student_id = str(student.get("student_id") or "").strip()
+
+    is_recognized = bool(student_name and student_id)
+    badge_label = "Recognized" if is_recognized else "Unmatched"
+    badge_bg = "#D7F2E9" if is_recognized else "#FCE8E6"
+    badge_color = "#176B5B" if is_recognized else DEDUCTION_RED
+
+    body_contents: list[dict[str, object]] = [
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "alignItems": "center",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "CSIE Student Portal",
+                    "weight": "bold",
+                    "size": "xl",
+                    "color": DARK_GREEN,
+                    "flex": 1,
+                },
+                _pill(badge_label, bg=badge_bg, color=badge_color),
+            ],
+        },
+        {
+            "type": "text",
+            "text": "Account Initialization & Terms",
+            "size": "xs",
+            "color": MUTED_TEXT,
+            "margin": "xs",
+        },
+    ]
+
+    if is_recognized:
+        body_contents.append({
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#FFFFFF",
+            "cornerRadius": "md",
+            "paddingAll": "14px",
+            "margin": "md",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "Student Identity Recognized",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": DARK_GREEN,
+                },
+                {
+                    "type": "text",
+                    "text": "Your LINE account has been connected with your CSIE student record in the database.",
+                    "size": "xs",
+                    "color": MUTED_TEXT,
+                    "wrap": True,
+                    "margin": "xs",
+                },
+                {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
+                _stat_row("Student Name", student_name, margin="sm", label_flex=4, value_flex=4),
+                _stat_row("Student ID", student_id, margin="xs", label_flex=4, value_flex=4),
+                _stat_row("LINE Name", display_name or student_name, margin="xs", label_flex=4, value_flex=4),
+                _stat_row("Account Link", "Connected in Database", margin="xs", label_flex=4, value_flex=4),
+            ],
+        })
+
+        body_contents.append({
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#FFFFFF",
+            "cornerRadius": "md",
+            "paddingAll": "14px",
+            "margin": "sm",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "Terms of Use & Privacy Consent",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": DARK_GREEN,
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "By using this bot, you agree to allow CSIE Attendance Bot "
+                        "to link your LINE account to record attendance, calculate salary estimates, "
+                        "manage leave requests, and track work schedules in accordance with lab policy."
+                    ),
+                    "size": "xs",
+                    "color": MUTED_TEXT,
+                    "wrap": True,
+                    "margin": "xs",
+                },
+                {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
+                {
+                    "type": "text",
+                    "text": (
+                        "• Privacy: Personal attendance and salary details are strictly private.\n"
+                        "• Attendance: Month-to-date rates and leave records are updated automatically.\n"
+                        "• Support: Need corrections or have questions? Use the Help Center."
+                    ),
+                    "size": "xxs",
+                    "color": LABEL_TEXT,
+                    "wrap": True,
+                    "margin": "xs",
+                },
+            ],
+        })
+
+        body_contents.append(_button("✅ Agree to Terms & Get Started", "action=agree_terms", margin="md"))
+        body_contents.append(_button("Open Rich Menu", "action=richmenu_attendance", color=DARK_GREEN, margin="xs"))
+    else:
+        body_contents.append({
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#FFFFFF",
+            "cornerRadius": "md",
+            "paddingAll": "14px",
+            "margin": "md",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "Account Not Linked",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": DEDUCTION_RED,
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "We could not automatically match your LINE display name with "
+                        "an active student record in our Students sheet."
+                    ),
+                    "size": "xs",
+                    "color": MUTED_TEXT,
+                    "wrap": True,
+                    "margin": "xs",
+                },
+                {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
+                _stat_row("LINE Name", display_name or "Unknown", margin="sm", label_flex=4, value_flex=4),
+                _stat_row("Status", "Pending Verification", margin="xs", value_color=DEDUCTION_RED, label_flex=4, value_flex=4),
+                {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
+                {
+                    "type": "text",
+                    "text": (
+                        "Please update your LINE display name to match your registered name "
+                        "in the Students sheet, or contact an administrator to link your account."
+                    ),
+                    "size": "xxs",
+                    "color": LABEL_TEXT,
+                    "wrap": True,
+                    "margin": "xs",
+                },
+            ],
+        })
+
+        body_contents.append({
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#FFFFFF",
+            "cornerRadius": "md",
+            "paddingAll": "14px",
+            "margin": "sm",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "Terms & Usage Notice",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": DARK_GREEN,
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "CSIE Attendance Bot requires a verified student record to record attendance, "
+                        "process leave requests, and calculate payroll estimates."
+                    ),
+                    "size": "xs",
+                    "color": MUTED_TEXT,
+                    "wrap": True,
+                    "margin": "xs",
+                },
+            ],
+        })
+
+        body_contents.append(_button("❓ Contact Admin / Support", "action=richmenu_help", margin="md"))
+
+    bubble: dict[str, object] = {
+        "type": "bubble",
+        "size": "mega",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": CARD_BG,
+            "paddingAll": "20px",
+            "contents": body_contents,
+        },
+    }
+
+    alt_text = f"CSIE Student Portal: Account Initialization ({'Recognized' if is_recognized else 'Unmatched'})"
+    return FlexMessage(
+        alt_text=alt_text,
+        contents=FlexContainer.from_dict(bubble),
+        quick_reply=QuickReply(
+            items=[
+                QuickReplyItem(action=PostbackAction(label="My Attendance", data="action=richmenu_attendance", display_text="My Attendance")),
+                QuickReplyItem(action=PostbackAction(label="Leave History", data="action=richmenu_leave_history", display_text="Leave History")),
+                QuickReplyItem(action=PostbackAction(label="Salary Inquiry", data="action=richmenu_salary", display_text="Salary Inquiry")),
+                QuickReplyItem(action=PostbackAction(label="Work Schedule", data="action=richmenu_schedule", display_text="Work Schedule")),
+                QuickReplyItem(action=PostbackAction(label="Leave Request", data="action=richmenu_leave_request", display_text="Leave Request")),
+                QuickReplyItem(action=PostbackAction(label="Help Center", data="action=richmenu_help", display_text="Help Center")),
+            ]
+        ),
+    )
+
+
+def terms_agreement_confirmed_message(
+    student: dict[str, object],
+) -> FlexMessage:
+    """Build the confirmation card when a user agrees to the terms of usage."""
+    student_name = str(student.get("chinese_name") or student.get("name") or "").strip()
+    student_id = str(student.get("student_id") or "").strip()
+
+    bubble: dict[str, object] = {
+        "type": "bubble",
+        "size": "mega",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": CARD_BG,
+            "paddingAll": "20px",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "alignItems": "center",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "CSIE Student Portal",
+                            "weight": "bold",
+                            "size": "xl",
+                            "color": DARK_GREEN,
+                            "flex": 1,
+                        },
+                        _pill("Active", bg="#D7F2E9", color="#176B5B"),
+                    ],
+                },
+                {
+                    "type": "text",
+                    "text": "Terms Accepted · Account Active",
+                    "size": "xs",
+                    "color": MUTED_TEXT,
+                    "margin": "xs",
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "backgroundColor": "#FFFFFF",
+                    "cornerRadius": "md",
+                    "paddingAll": "14px",
+                    "margin": "md",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "Setup Complete!",
+                            "weight": "bold",
+                            "size": "sm",
+                            "color": DARK_GREEN,
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                f"Welcome, {student_name}! You have agreed to the terms and usage. "
+                                "Your LINE account is fully connected and recognized in the CSIE Attendance database."
+                            ),
+                            "size": "xs",
+                            "color": MUTED_TEXT,
+                            "wrap": True,
+                            "margin": "xs",
+                        },
+                        {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
+                        _stat_row("Student Name", student_name, margin="sm", label_flex=4, value_flex=4),
+                        _stat_row("Student ID", student_id, margin="xs", label_flex=4, value_flex=4),
+                        _stat_row("Status", "Verified & Connected", margin="xs", label_flex=4, value_flex=4),
+                    ],
+                },
+                _stat_row("My Attendance", "/attendance", bold=False, margin="sm"),
+                _stat_row("Leave History", "/leaves", bold=False, margin="xs"),
+                _stat_row("Salary Inquiry", "/salary", bold=False, margin="xs"),
+                _stat_row("Work Schedule", "/schedule", bold=False, margin="xs"),
+                _stat_row("Leave Request", "/leaverequest", bold=False, margin="xs"),
+                _stat_row("Help Center", "/ticket", bold=False, margin="xs"),
+                _button("Open Rich Menu", "action=richmenu_attendance", margin="md"),
+            ],
+        },
+    }
+
+    return FlexMessage(
+        alt_text="CSIE Student Portal: Terms Accepted & Account Active",
         contents=FlexContainer.from_dict(bubble),
         quick_reply=QuickReply(
             items=[

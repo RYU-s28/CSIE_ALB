@@ -51,10 +51,25 @@ def find_students_by_display_name(
     if not normalized_name:
         return []
 
-    return [
+    # First check exact match on explicit display_name
+    primary = [
         student
         for student in students
         if normalize_display_name(student.get("display_name", "")) == normalized_name
+        and _is_active(student)
+    ]
+    if primary:
+        return primary
+
+    # Fallback to matching name, chinese_name, or full_name
+    return [
+        student
+        for student in students
+        if (
+            normalize_display_name(student.get("name", "")) == normalized_name
+            or normalize_display_name(student.get("chinese_name", "")) == normalized_name
+            or normalize_display_name(student.get("full_name", "")) == normalized_name
+        )
         and _is_active(student)
     ]
 

@@ -1,13 +1,17 @@
 """Unit tests for CSIE Student Portal Rich Menu and features."""
 
+import os
 import sys
 from datetime import date
 from decimal import Decimal
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
+os.environ.setdefault("LINE_CHANNEL_SECRET", "mock_secret")
+os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "mock_token")
+
 # Stub external libraries if not installed in the testing environment
-for mod in ["dotenv", "gspread", "gspread.exceptions", "google", "google.oauth2", "google.oauth2.service_account"]:
+for mod in ["dotenv", "gspread", "gspread.exceptions", "google", "google.oauth2", "google.oauth2.service_account", "fastapi"]:
     if mod not in sys.modules:
         sys.modules[mod] = MagicMock()
 
@@ -77,11 +81,13 @@ from bot.line_ui import (
     DARK_GREEN,
     BUTTON_GREEN,
     help_center_message,
+    initialization_message,
     leave_history_message,
     leave_request_menu_message,
     my_attendance_message,
     salary_breakdown_message,
     salary_overview_message,
+    terms_agreement_confirmed_message,
     welcome_message,
     work_schedule_message,
 )
@@ -92,6 +98,8 @@ from ui.leave_confirmation import (
     withdrawal_confirmation_message,
 )
 from database.google_sheets import get_student_attendance_summary
+from attendance.student_directory import find_students_by_display_name
+from app import resolve_student_from_event
 
 
 class TestSalaryCalculation(TestCase):
@@ -248,6 +256,33 @@ class TestFlexMessageBuilders(TestCase):
         data = msg.contents.data
         self.assertEqual(data["body"]["backgroundColor"], CARD_BG)
 
+    def test_welcome_message_with_recognized_student(self):
+        student = {"student_id": "ST101", "name": "Romel Jr.", "chinese_name": "杜榮瑪"}
+        msg = welcome_message(student)
+        data = msg.contents.data
+        self.assertEqual(data["body"]["backgroundColor"], CARD_BG)
+        self.assertIn("CSIE Student Portal", msg.alt_text)
+
+    def test_initialization_message_recognized(self):
+        student = {"student_id": "ST101", "name": "Romel Jr.", "chinese_name": "杜榮瑪"}
+        msg = initialization_message(student, display_name="Romel Jr.", is_registered=True)
+        data = msg.contents.data
+        self.assertEqual(data["body"]["backgroundColor"], CARD_BG)
+        self.assertIn("Recognized", msg.alt_text)
+
+    def test_initialization_message_unmatched(self):
+        msg = initialization_message(None, display_name="RandomUser", error_status="unmatched")
+        data = msg.contents.data
+        self.assertEqual(data["body"]["backgroundColor"], CARD_BG)
+        self.assertIn("Unmatched", msg.alt_text)
+
+    def test_terms_agreement_confirmed_message_design(self):
+        student = {"student_id": "ST101", "name": "Romel Jr.", "chinese_name": "杜榮瑪"}
+        msg = terms_agreement_confirmed_message(student)
+        data = msg.contents.data
+        self.assertEqual(data["body"]["backgroundColor"], CARD_BG)
+        self.assertIn("Terms Accepted", msg.alt_text)
+
     def test_leave_confirmation_message_design(self):
         msg = leave_confirmation_message(
             student_name="Romel Jr.",
@@ -352,3 +387,55 @@ class TestAttendanceCalculation(TestCase):
         self.assertEqual(summary["completed_scheduled_workdays"], 0)
         self.assertIsNone(summary["attendance_pct"])
         self.assertEqual(summary["today_status"], "Upcoming")
+
+
+class TestStudentDirectoryMatching(TestCase):
+    def test_find_students_by_display_name_primary(self):
+        students = [
+            {"student_id": "ST101", "name": "Romel", "display_name": "Romel Jr.", "active": "true"},
+            {"student_id": "ST102", "name": "Juan", "display_name": "Juan Dela Cruz", "active": "true"},
+        ]
+        matches = find_students_by_display_name(students, "Romel Jr.")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["student_id"], "ST101")
+
+    def test_find_students_by_display_name_fallback_to_name(self):
+        students = [
+            {"student_id": "ST101", "name": "Romel Jr.", "display_name": "", "active": "true"},
+            {"student_id": "ST102", "name": "Juan", "display_name": "Juan Dela Cruz", "active": "true"},
+        ]
+        matches = find_students_by_display_name(students, "romel jr.")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["student_id"], "ST101")
+
+    def test_find_students_by_display_name_fallback_to_chinese_name(self):
+        students = [
+            {"student_id": "ST101", "name": "Romel", "chinese_name": "杜榮瑪", "display_name": "", "active": "true"},
+        ]
+        matches = find_students_by_display_name(students, "杜榮瑪")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["student_id"], "ST101")
+
+    @patch("app.find_student_by_line_user_id")
+    def test_resolve_student_from_event_already_registered(self, mock_find):
+        mock_find.return_value = {"student_id": "ST101", "name": "Romel Jr."}
+        event = MagicMock()
+        event.source.user_id = "U12345"
+        student = resolve_student_from_event(event)
+        self.assertIsNotNone(student)
+        self.assertEqual(student["student_id"], "ST101")
+
+    @patch("app.identify_or_register_student")
+    @patch("app.find_student_by_line_user_id", return_value=None)
+    def test_resolve_student_from_event_auto_connect(self, mock_find, mock_ident):
+        from app import StudentIdentification
+        mock_ident.return_value = StudentIdentification(
+            status="registered",
+            student={"student_id": "ST102", "name": "Juan"},
+            display_name="Juan",
+        )
+        event = MagicMock()
+        event.source.user_id = "U99999"
+        student = resolve_student_from_event(event)
+        self.assertIsNotNone(student)
+        self.assertEqual(student["student_id"], "ST102")

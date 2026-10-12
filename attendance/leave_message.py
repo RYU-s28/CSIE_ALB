@@ -40,15 +40,40 @@ def parse_attendance_date(message: str, *, today: date | None = None) -> date:
                 int(explicit_date.group("month")),
                 int(explicit_date.group("day")),
             )
-        except ValueError:
-            pass
+        except ValueError as error:
+            raise ValueError("Invalid attendance date in message.") from error
 
-    month_day = re.search(r"(?<!\d)(\d{1,2})/(\d{1,2})(?!\d)", text)
+    month_day = re.search(r"(?<![\d/])(\d{1,2})[/月](\d{1,2})日?(?![\d/])", text)
     if month_day:
         try:
             return date(today.year, int(month_day.group(1)), int(month_day.group(2)))
-        except ValueError:
-            pass
+        except ValueError as error:
+            raise ValueError("Invalid attendance date in message.") from error
+
+    month_names = {
+        name: month for month, names in enumerate((
+            ("january", "jan"), ("february", "feb"), ("march", "mar"),
+            ("april", "apr"), ("may",), ("june", "jun"), ("july", "jul"),
+            ("august", "aug"), ("september", "sep", "sept"),
+            ("october", "oct"), ("november", "nov"), ("december", "dec"),
+        ), start=1) for name in names
+    }
+    names_pattern = "|".join(sorted(month_names, key=len, reverse=True))
+    named_date = re.search(
+        rf"\b(?P<month>{names_pattern})\.?\s+(?P<day>\d{{1,2}})"
+        r"(?:st|nd|rd|th)?(?:,?\s+(?P<year>\d{4}))?\b", text,
+    ) or re.search(
+        rf"\b(?P<day>\d{{1,2}})(?:st|nd|rd|th)?\s+"
+        rf"(?P<month>{names_pattern})\.?(?:,?\s+(?P<year>\d{{4}}))?\b", text,
+    )
+    if named_date:
+        try:
+            return date(
+                int(named_date.group("year") or today.year),
+                month_names[named_date.group("month")], int(named_date.group("day")),
+            )
+        except ValueError as error:
+            raise ValueError("Invalid attendance date in message.") from error
 
     if "後天" in message or "后天" in message or "day after tomorrow" in text:
         return today + timedelta(days=2)

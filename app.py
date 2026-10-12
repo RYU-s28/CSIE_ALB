@@ -654,6 +654,8 @@ def handle_message(event):
             "半天",
             "回菲律賓",
             "待確認",
+            "不出來",
+            "取消工讀",
         }
         if category in leave_categories:
             confirmation_card = leave_confirmation_message(
@@ -673,12 +675,12 @@ def handle_message(event):
             else:
                 reply_to_line(event.reply_token, confirmation_card)
 
-            # Mirror the leave type into the Monthly Report grid.
-            update_monthly_report_cell(
-                student_work_id,
-                record.attendance_date,
-                category,
-            )
+        # Mirror every attendance notice into its dated Monthly Report cell.
+        update_monthly_report_cell(
+            student_work_id,
+            record.attendance_date,
+            category,
+        )
 
         print("CLASSIFICATION:", record.status)
         print("CONFIDENCE:", record.confidence)

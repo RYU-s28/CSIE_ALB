@@ -33,7 +33,10 @@ LINE user ID, require administrator review. The original attendance message is
 processed immediately after successful registration.
 
 The attendance date parser recognizes today/tomorrow phrases and explicit dates
-such as `2026-10-07`. Leave categories are written with the configured Chinese
+such as `2026-10-07`, `Oct 23`, `October 23rd, 2026`, `23 Oct`, and
+`10月23日`. Yearless dates use the current Taipei year; invalid dates are
+rejected. Advance notices such as "I already filed leave for tomorrow cannot
+work" and "I will be absent on Oct 23" are saved for the specified date. Leave categories are written with the configured Chinese
 labels, and recognized categories receive the `Confirmed` status.
 
 Set `GEMINI_API_KEY` to enable staged AI attendance classification. Common
@@ -106,3 +109,10 @@ date and weekday, expected and attending counts, followed only by non-empty
 attendance categories with each student's roster name. The attending count is
 the expected roster size minus students marked absent; "不坐公交車" is listed
 as a category but does not reduce attendance.
+
+My Attendance reads only the student's Monthly Report row. Day columns define
+the scheduled dates. Blank past cells count as present, matching the report's
+leave-marking convention; a blank cell today remains pending. Late arrivals
+count as attended, half-days count as 0.5, and future leave is excluded from
+month-to-date totals. Missing report sections or student rows produce a retrieval
+error instead of falling back to leave records.

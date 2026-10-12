@@ -1304,11 +1304,10 @@ def update_monthly_report_cell(
         return False
 
 
-def get_monthly_attendance_counts(
-    student_id: str,
-    target_month: date,
-) -> tuple[int, int]:
-    """Count full and half attendance days in one student's monthly report row."""
+def get_monthly_report_entries(
+    student_id: str, target_month: date,
+) -> dict[date, str]:
+    """Read scheduled dates and cell labels from one monthly report row."""
 
     sheet = _get_monthly_report_sheet()
     if sheet is None:
@@ -1372,26 +1371,29 @@ def get_monthly_attendance_counts(
             f"{target_month:%B %Y} report."
         )
 
-    full_days = 0
-    half_days = 0
-    for column in day_to_col.values():
-        if column >= len(student_row):
-            continue
-        value = str(student_row[column]).strip().casefold()
-        if value in {"出席", "present"}:
-            full_days += 1
-        elif value in {"半天", "half day", "half_day"}:
-            half_days += 1
+    return {
+        date(target_month.year, target_month.month, day):
+        str(student_row[column]).strip() if column < len(student_row) else ""
+        for day, column in day_to_col.items()
+    }
 
-    return full_days, half_days
+
+def get_monthly_attendance_counts(
+    student_id: str, target_month: date,
+) -> tuple[int, int]:
+    """Count explicit full and half attendance cells for salary estimates."""
+    values = [value.casefold() for value in get_monthly_report_entries(student_id, target_month).values()]
+    return (
+        sum(value in {"出席", "present"} for value in values),
+        sum(value in {"半天", "half day", "half_day"} for value in values),
+    )
 
 
 def mark_present_in_monthly_report(target_date: date) -> None:
     """Write '出席' for every active student who has no leave on *target_date*.
 
-    Reads today's Attendance sheet rows and skips any student that already has
-    a record.  All remaining active students are marked 出席 in the Monthly
-    Report grid.
+    Preserve existing Monthly Report values, including manually entered leave.
+    Leave log entries also prevent a failed mirror write from becoming present.
     """
     try:
         students, _ = get_report_students()
@@ -1402,6 +1404,9 @@ def mark_present_in_monthly_report(target_date: date) -> None:
         for student_id in students:
             if student_id in leave_student_ids:
                 continue  # already has a leave record — do not overwrite
+            entries = get_monthly_report_entries(student_id, target_date)
+            if target_date not in entries or entries[target_date]:
+                continue
             update_monthly_report_cell(student_id, target_date, "出席")
     except Exception as error:
         print("MARK PRESENT ERROR:", repr(error))
@@ -1454,181 +1459,63 @@ def get_student_leave_records(
 
 
 def get_student_attendance_summary(
-    student_id: str,
-    target_month: date,
+    student_id: str, target_month: date,
 ) -> dict[str, object]:
-    """Compile Month-to-Date (MTD) attendance statistics for a student.
+    """Calculate MTD attendance solely from the student's Monthly Report grid.
 
-    Calculation Rules:
-    1. Retrieve current date using Asia/Taipei timezone.
-    2. Identify the first day of target_month.
-    3. Retrieve scheduled workdays from Work Calendar (excluding Mon/Tue unless overridden).
-    4. Only include elapsed scheduled workdays through today (exclude future scheduled workdays).
-    5. Don't count current workday as completed before its attendance status is finalized.
-    6. For previous months, calculate using all scheduled workdays in that month.
-    7. For future months, show N/A until attendance begins.
-    8. attendance_rate = (effective_attended / completed_scheduled_workdays) * 100
-       where effective_attended = attended_days + half_days * 0.5.
-    9. If there are no elapsed scheduled workdays, display N/A.
+    The report's day columns define the schedule. Blank elapsed cells mean
+    present; today's blank cell is pending. Future leave never reduces MTD.
+    Missing reports raise an error instead of falling back to leave logs.
     """
-    from scheduler.work_calendar import is_workday
-    from datetime import timedelta
-
     today = datetime.now(ZoneInfo("Asia/Taipei")).date()
-
-    target_year = target_month.year
-    target_m = target_month.month
-    month_start = date(target_year, target_m, 1)
-    if target_m == 12:
-        next_month_start = date(target_year + 1, 1, 1)
-    else:
-        next_month_start = date(target_year, target_m + 1, 1)
-
-    is_past_month = (target_year < today.year) or (target_year == today.year and target_m < today.month)
-    is_current_month = (target_year == today.year and target_m == today.month)
-    is_future_month = (target_year > today.year) or (target_year == today.year and target_m > today.month)
-
-    # 1. Collect all scheduled workdays in target month
-    all_month_workdays: list[date] = []
-    curr = month_start
-    while curr < next_month_start:
-        if is_workday(curr):
-            all_month_workdays.append(curr)
-        curr += timedelta(days=1)
-    total_scheduled_workdays = len(all_month_workdays)
-
-    # 2. Today's attendance status & record
-    status_translation = {
-        "出席": "Present",
-        "遲到": "Late",
-        "病假": "Sick Leave",
-        "事假": "Personal Leave",
-        "經痛": "Menstrual Leave",
-        "特休": "Annual Leave",
-        "半天": "Half Day",
-        "回菲律賓": "Abroad",
-        "待確認": "Pending Review",
-        "不坐公交車": "No Bus",
+    entries = get_monthly_report_entries(student_id, target_month)
+    month_start = target_month.replace(day=1)
+    current = month_start == today.replace(day=1)
+    future = month_start > today.replace(day=1)
+    translations = {
+        "出席": "Present", "present": "Present",
+        "遲到": "Late", "迟到": "Late", "late": "Late",
+        "病假": "Sick Leave", "事假": "Personal Leave",
+        "經痛": "Menstrual Leave", "特休": "Annual Leave",
+        "半天": "Half Day", "half day": "Half Day", "half_day": "Half Day",
+        "回菲律賓": "Abroad", "待確認": "Pending Review",
+        "不坐公交車": "No Bus", "不出來": "Absent", "取消工讀": "Cancelled Work",
     }
-    today_record = get_attendance_record(student_id, today) if is_current_month else None
-    today_is_workday = is_workday(today) if is_current_month else False
-
-    if is_current_month:
-        if today_record:
-            rec_type = today_record.get("type", "").strip()
-            en_status = status_translation.get(rec_type, rec_type or "Present")
-            today_status = en_status
-        elif today_is_workday:
-            today_status = "Pending"
-        else:
-            today_status = "Rest Day"
-    elif is_past_month:
-        today_status = "Completed"
+    today_value = entries.get(today, "").casefold()
+    if current:
+        today_status = (
+            "Rest Day" if today not in entries else
+            translations.get(today_value, today_value or "Pending")
+        )
     else:
-        today_status = "Upcoming"
-
-    # 3. Determine completed vs remaining scheduled workdays
-    if is_past_month:
-        completed_workdays_list = all_month_workdays
-        remaining_workdays_list = []
-    elif is_future_month:
-        completed_workdays_list = []
-        remaining_workdays_list = all_month_workdays
-    else:  # is_current_month
-        past_workdays = [d for d in all_month_workdays if d < today]
-        future_workdays = [d for d in all_month_workdays if d > today]
-
-        if today_is_workday:
-            # If today has a finalized attendance record, include it in completed days
-            if today_record is not None:
-                completed_workdays_list = past_workdays + [today]
-                remaining_workdays_list = future_workdays
-            else:
-                # Today is currently in progress / pending; exclude from completed denominator
-                completed_workdays_list = past_workdays
-                remaining_workdays_list = [today] + future_workdays
+        today_status = "Upcoming" if future else "Completed"
+    completed = {
+        day: value.casefold() for day, value in entries.items()
+        if day < today or (day == today and value and value != "待確認")
+    }
+    attended = absent = half = late = 0
+    for value in completed.values():
+        if value in {"半天", "half day", "half_day"}:
+            half += 1
+        elif value in {"遲到", "迟到", "late"}:
+            late += 1
+            attended += 1
+        elif value in {"", "出席", "present", "不坐公交車", "no bus"}:
+            attended += 1
         else:
-            # Today is a rest day (non-working day)
-            completed_workdays_list = past_workdays
-            remaining_workdays_list = future_workdays
-
-    completed_scheduled_workdays = len(completed_workdays_list)
-    remaining_scheduled_workdays = len(remaining_workdays_list)
-
-    if is_future_month or total_scheduled_workdays == 0:
-        return {
-            "scheduled_days": total_scheduled_workdays,
-            "completed_scheduled_workdays": 0,
-            "remaining_scheduled_workdays": total_scheduled_workdays,
-            "elapsed_workdays": 0,
-            "attended_days": 0,
-            "absent_days": 0,
-            "half_days": 0,
-            "late_days": 0,
-            "attendance_pct": None,
-            "today_status": today_status,
-            "month_label": target_month.strftime("%B %Y"),
-        }
-
-    # 4. Count absences, half-days, and late arrivals for the student
-    try:
-        all_rows = get_attendance_rows()
-    except Exception:
-        all_rows = []
-    student_id_str = str(student_id).strip()
-    month_prefix = target_month.strftime("%Y-%m")
-
-    absent_days = 0
-    late_days = 0
-    half_day_rows = 0
-    for row in all_rows:
-        if str(row.get("student_id", "")).strip() != student_id_str:
-            continue
-        row_date_str = str(row.get("date", "")).strip()
-        if not row_date_str.startswith(month_prefix):
-            continue
-        # In current month, ignore records dated in the future
-        if is_current_month and row_date_str > today.isoformat():
-            continue
-
-        row_type = str(row.get("type", "")).strip()
-        if row_type == "遲到":
-            late_days += 1
-        elif row_type == "半天":
-            half_day_rows += 1
-        elif row_type not in {"出席", "不坐公交車"}:
-            absent_days += 1
-
-    # 5. Full and half days from monthly report sheet if available
-    full_days = 0
-    monthly_half_days = 0
-    try:
-        full_days, monthly_half_days = get_monthly_attendance_counts(student_id, target_month)
-    except Exception:
-        pass
-
-    half_days = max(half_day_rows, monthly_half_days)
-
-    # 6. Attended days in absence-only model or from grid
-    if is_future_month or completed_scheduled_workdays == 0:
-        attended_days = 0
-        attendance_pct = None
-    else:
-        inferred_attended = max(0, completed_scheduled_workdays - absent_days - half_days)
-        attended_days = max(full_days, inferred_attended) if full_days > 0 else inferred_attended
-        effective_attended = attended_days + half_days * 0.5
-        attendance_pct = min(100, max(0, round((effective_attended / completed_scheduled_workdays) * 100)))
-
+            absent += 1
+    total = len(entries)
+    elapsed = len(completed)
     return {
-        "scheduled_days": total_scheduled_workdays,
-        "completed_scheduled_workdays": completed_scheduled_workdays,
-        "remaining_scheduled_workdays": remaining_scheduled_workdays,
-        "elapsed_workdays": completed_scheduled_workdays,
-        "attended_days": attended_days,
-        "absent_days": absent_days,
-        "half_days": half_days,
-        "late_days": late_days,
-        "attendance_pct": attendance_pct,
+        "scheduled_days": total,
+        "completed_scheduled_workdays": elapsed,
+        "remaining_scheduled_workdays": total - elapsed,
+        "elapsed_workdays": elapsed,
+        "attended_days": attended,
+        "absent_days": absent,
+        "half_days": half,
+        "late_days": late,
+        "attendance_pct": round((attended + half * 0.5) / elapsed * 100) if elapsed else None,
         "today_status": today_status,
         "month_label": target_month.strftime("%B %Y"),
     }

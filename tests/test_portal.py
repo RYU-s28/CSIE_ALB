@@ -317,76 +317,106 @@ class TestCommandHandling(TestCase):
 
 
 class TestAttendanceCalculation(TestCase):
-    @patch("database.google_sheets.get_monthly_attendance_counts", return_value=(0, 0))
-    @patch("database.google_sheets.get_attendance_record", return_value=None)
-    @patch("database.google_sheets.get_attendance_rows", return_value=[])
-    @patch("database.google_sheets.datetime")
-    def test_mtd_october_12_all_attended(self, mock_dt, mock_rows, mock_rec, mock_counts):
-        # 2026-10-12 is Monday (rest day). Up to Oct 12, there are 9 completed workdays.
-        mock_now = MagicMock()
-        mock_now.date.return_value = date(2026, 10, 12)
-        mock_dt.now.return_value = mock_now
+    def summary(self, entries, today=date(2026, 10, 12), month=date(2026, 10, 1)):
+        with patch("database.google_sheets.datetime") as clock, patch(
+            "database.google_sheets.get_monthly_report_entries", return_value=entries
+        ), patch("database.google_sheets.get_attendance_rows", side_effect=AssertionError("Leave logs must not be read")):
+            clock.now.return_value.date.return_value = today
+            return get_student_attendance_summary("ST001", month)
 
-        summary = get_student_attendance_summary("ST001", date(2026, 10, 1))
-
+    def test_report_overrides_logs_and_ignores_future_leave(self):
+        entries = {date(2026, 10, day): "" for day in (1, 2, 3, 4, 7, 8, 9, 10, 11, 14, 23)}
+        entries[date(2026, 10, 7)] = "病假"
+        entries[date(2026, 10, 8)] = "半天"
+        entries[date(2026, 10, 9)] = "遲到"
+        entries[date(2026, 10, 23)] = "事假"
+        summary = self.summary(entries)
         self.assertEqual(summary["completed_scheduled_workdays"], 9)
-        self.assertEqual(summary["remaining_scheduled_workdays"], 14)
-        self.assertEqual(summary["scheduled_days"], 23)
-        self.assertEqual(summary["attended_days"], 9)
-        self.assertEqual(summary["absent_days"], 0)
-        self.assertEqual(summary["attendance_pct"], 100)
-        self.assertEqual(summary["today_status"], "Rest Day")
-
-    @patch("database.google_sheets.get_monthly_attendance_counts", return_value=(0, 0))
-    @patch("database.google_sheets.get_attendance_record", return_value=None)
-    @patch("database.google_sheets.get_attendance_rows", return_value=[])
-    @patch("database.google_sheets.datetime")
-    def test_mtd_workday_in_progress_pending(self, mock_dt, mock_rows, mock_rec, mock_counts):
-        # 2026-10-14 is Wednesday (workday). No attendance record yet -> pending, excluded from completed
-        mock_now = MagicMock()
-        mock_now.date.return_value = date(2026, 10, 14)
-        mock_dt.now.return_value = mock_now
-
-        summary = get_student_attendance_summary("ST001", date(2026, 10, 1))
-
-        self.assertEqual(summary["completed_scheduled_workdays"], 9)
-        self.assertEqual(summary["remaining_scheduled_workdays"], 14)  # Oct 14 + 13 future days
-        self.assertEqual(summary["today_status"], "Pending")
-        self.assertEqual(summary["attendance_pct"], 100)
-
-    @patch("database.google_sheets.get_monthly_attendance_counts", return_value=(0, 0))
-    @patch("database.google_sheets.get_attendance_record", return_value=None)
-    @patch("database.google_sheets.datetime")
-    def test_mtd_half_days_and_absences(self, mock_dt, mock_rec, mock_counts):
-        # 2026-10-12, 1 sick leave, 1 half-day
-        mock_now = MagicMock()
-        mock_now.date.return_value = date(2026, 10, 12)
-        mock_dt.now.return_value = mock_now
-
-        with patch("database.google_sheets.get_attendance_rows", return_value=[
-            {"student_id": "ST001", "date": "2026-10-07", "type": "病假"},
-            {"student_id": "ST001", "date": "2026-10-08", "type": "半天"},
-        ]):
-            summary = get_student_attendance_summary("ST001", date(2026, 10, 1))
-
-        self.assertEqual(summary["completed_scheduled_workdays"], 9)
+        self.assertEqual(summary["remaining_scheduled_workdays"], 2)
+        self.assertEqual(summary["attended_days"], 7)
         self.assertEqual(summary["absent_days"], 1)
         self.assertEqual(summary["half_days"], 1)
-        self.assertEqual(summary["attended_days"], 7)
-        # effective_attended = 7 + 0.5 = 7.5. 7.5 / 9 * 100 = 83.33% -> 83%
+        self.assertEqual(summary["late_days"], 1)
         self.assertEqual(summary["attendance_pct"], 83)
+        self.assertEqual(summary["today_status"], "Rest Day")
 
-    @patch("database.google_sheets.datetime")
-    def test_mtd_future_month_returns_na(self, mock_dt):
-        mock_now = MagicMock()
-        mock_now.date.return_value = date(2026, 10, 12)
-        mock_dt.now.return_value = mock_now
+    def test_today_pending_then_finalized_from_report(self):
+        entries = {date(2026, 10, 7): "", date(2026, 10, 14): ""}
+        summary = self.summary(entries, today=date(2026, 10, 14))
+        self.assertEqual(summary["today_status"], "Pending")
+        self.assertEqual(summary["completed_scheduled_workdays"], 1)
+        entries[date(2026, 10, 14)] = "病假"
+        summary = self.summary(entries, today=date(2026, 10, 14))
+        self.assertEqual(summary["today_status"], "Sick Leave")
+        self.assertEqual(summary["attendance_pct"], 50)
 
-        summary = get_student_attendance_summary("ST001", date(2026, 11, 1))
-
-        self.assertEqual(summary["completed_scheduled_workdays"], 0)
+    def test_future_month_returns_na(self):
+        summary = self.summary({date(2026, 11, 4): "病假"}, month=date(2026, 11, 1))
         self.assertIsNone(summary["attendance_pct"])
         self.assertEqual(summary["today_status"], "Upcoming")
+
+    def test_missing_report_does_not_infer_perfect_attendance(self):
+        with patch("database.google_sheets.get_monthly_report_entries", side_effect=ValueError("Missing month")):
+            with self.assertRaises(ValueError):
+                get_student_attendance_summary("ST001", date(2026, 10, 1))
+
+    def test_scheduled_present_preserves_manual_report_leave(self):
+        from database.google_sheets import mark_present_in_monthly_report
+        target = date(2026, 10, 23)
+        with patch("database.google_sheets.get_report_students", return_value=({"ST001": "Name", "ST002": "Other"}, {})), patch(
+            "database.google_sheets.get_attendance_rows", return_value=[]
+        ), patch("database.google_sheets.get_monthly_report_entries", side_effect=[{target: "事假"}, {target: ""}]), patch(
+            "database.google_sheets.update_monthly_report_cell"
+        ) as write:
+            mark_present_in_monthly_report(target)
+        write.assert_called_once_with("ST002", target, "出席")
+
+    def test_real_grid_reader_selects_student_and_month(self):
+        from database.google_sheets import get_monthly_report_entries
+        sheet = MagicMock()
+        sheet.get_all_values.return_value = [
+            ["", "", "October 2026"],
+            ["", "", "1", "2", "3", "4", "7"],
+            ["OTHER", "Other", "病假"],
+            ["ST001", "Name", "", "半天", "病假", "遲到", ""],
+            ["", "", "November 2026"],
+            ["ST001", "Name", "事假"],
+        ]
+        with patch("database.google_sheets._get_monthly_report_sheet", return_value=sheet):
+            entries = get_monthly_report_entries("ST001", date(2026, 10, 1))
+        self.assertEqual(entries[date(2026, 10, 2)], "半天")
+        self.assertEqual(len(entries), 5)
+
+
+class TestAdvanceLeave(TestCase):
+    def test_dates(self):
+        from attendance.leave_message import parse_attendance_date
+        today = date(2026, 10, 12)
+        for message, expected in (
+            ("hi I already filed leave for tomorrow cannot work", date(2026, 10, 13)),
+            ("I will be absent on oct 23 because of an appointment", date(2026, 10, 23)),
+            ("I will be absent on October 23rd, 2026", date(2026, 10, 23)),
+            ("I will be absent on 23 Oct", date(2026, 10, 23)),
+            ("10月23日請假", date(2026, 10, 23)),
+            ("day after tomorrow cannot work", date(2026, 10, 14)),
+            ("leave on 2027-01-02", date(2027, 1, 2)),
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(parse_attendance_date(message, today=today), expected)
+        with self.assertRaises(ValueError):
+            parse_attendance_date("absent on Feb 30", today=today)
+
+    def test_advance_leave_classified_without_ai(self):
+        from attendance.ai_classifier import classify_attendance_message
+        with patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
+            for message, category in (
+                ("hi I already filed leave for tomorrow cannot work", "事假"),
+                ("I will be absent on oct 23 because of an appointment", "不出來"),
+            ):
+                with self.subTest(message=message):
+                    result = classify_attendance_message(message)
+                    self.assertEqual(result.intent, "LEAVE")
+                    self.assertEqual(result.category, category)
 
 
 class TestStudentDirectoryMatching(TestCase):

@@ -230,7 +230,7 @@ def _python_confidently_detects_leave_intent(
     if re.search(
         r"\b(?:i|i'm|i am|we|we're|we are)\b.{0,100}"
         r"\b(?:can't|cannot|won't|will not|unable|not coming|"
-        r"taking leave|request(?:ing)? leave)\b",
+        r"taking leave|request(?:ing)? leave|filed(?: for)? leave|will be absent)\b",
         text,
     ):
         return True

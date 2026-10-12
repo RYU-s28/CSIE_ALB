@@ -55,6 +55,8 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
         "advance leave",
         "already took leave",
         "already requested leave",
+        "filed leave",
+        "filed for leave",
     ),
     "menstrual_leave": (
         "經痛",
@@ -106,6 +108,12 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
         "不來上班",
         "不来上班",
         "not coming to work",
+        "will be absent",
+        "will not work",
+        "won't work",
+        "cannot work",
+        "can't work",
+        "unable to work",
     ),
     "cancelled_work": (
         "取消工讀",
@@ -124,6 +132,8 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
 MIN_ATTENDANCE_CONFIDENCE = 0.60
 
 LEAVE_INTENT_PATTERNS = (
+    r"\b(?:filed|filed for|already requested)\s+(?:a\s+)?leave\b",
+    r"\b(?:i will be|i am|i\'m)\s+absent\b",
     r"\b(?:take|taking|request|requesting|apply for|applied for)\s+"
     r"(?:a\s+)?(?:sick|personal|menstrual|medical)?\s*leave\b",
     r"\b(?:will|going to)\s+(?:be\s+)?(?:taking|take|request|requesting)\s+"

@@ -385,7 +385,6 @@ def my_attendance_message(
                 _stat_row("Absences", str(summary.get("absent_days", 0)), value_color=absent_color, margin="sm", label_flex=5, value_flex=2),
                 _stat_row("Half-days", str(summary.get("half_days", 0)), margin="sm", label_flex=5, value_flex=2),
                 _stat_row("Late arrivals", str(summary.get("late_days", 0)), margin="sm", label_flex=5, value_flex=2),
-                _stat_row("Completed scheduled workdays", str(summary.get("completed_scheduled_workdays", 0)), margin="sm", label_flex=5, value_flex=2),
                 _stat_row("Remaining scheduled workdays", str(summary.get("remaining_scheduled_workdays", 0)), margin="sm", label_flex=5, value_flex=2),
                 _stat_row("Today's status", str(summary.get("today_status", "Present")), margin="sm", label_flex=4, value_flex=3),
                 # Action button

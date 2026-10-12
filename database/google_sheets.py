@@ -1661,3 +1661,22 @@ def save_account_authorization(user_id: str, student_id: str) -> None:
         [user_id, student_id, datetime.now(ZoneInfo("Asia/Taipei")).isoformat(), TERMS_VERSION],
         value_input_option="RAW",
     )
+
+
+def search_active_students(query: str) -> list[dict[str, object]]:
+    """Search IDs and every roster name field without AI or fuzzy identity linking."""
+    terms = query.strip().casefold().split()
+    if not terms:
+        return []
+    results = []
+    for record in _read_students_records():
+        if not _is_student_active(record):
+            continue
+        haystack = " ".join(str(record.get(key) or "") for key in (
+            "student_id", "chinese_name", "full_name", "display_name", "name",
+        )).casefold()
+        if all(term in haystack for term in terms):
+            results.append(_student_identity(record))
+    return sorted(results, key=lambda student: (
+        str(student["student_id"]).casefold() != query.strip().casefold(), str(student["student_id"]),
+    ))

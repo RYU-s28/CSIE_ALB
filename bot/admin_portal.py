@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from linebot.v3.messaging import FlexContainer, FlexMessage
 from bot.line_ui import CARD_BG, DARK_GREEN, LABEL_TEXT, MUTED_TEXT, DEDUCTION_RED, _button, _stat_row
 from database import google_sheets as db
+from bot.search_context import begin_search, clear_search
 
 STATUSES = {
     "present": ("Present / Remove Leave", "出席"),
@@ -158,34 +159,67 @@ def daily_report_message(day, page=0):
     return card("Daily Attendance Report", contents or [paragraph("No active students.")], buttons, subtitle=f"{day.isoformat()} · Page {page + 1}")
 
 
+def search_button(day, *, query="", bus=False):
+    return {"type": "button", "style": "secondary", "height": "sm", "action": {
+        "type": "postback", "label": "🔎 Search name or student ID",
+        "data": action("admin_timeout_bus_search" if bus else "admin_search", date=day),
+        "inputOption": "openKeyboard",
+    }}
+
+
+def search_query(query):
+    query = (query or "").strip()
+    if len(urlencode({"query": query})) > 150:
+        raise ValueError("Search using a shorter name or student ID.")
+    return query
+
+
 def students_message(day, page=0, query=None):
-    students, _ = db.get_report_students()
-    matches = [(sid, student) for sid, student in sorted(students.items()) if not query or query.casefold() in (sid + " " + student.display_name).casefold()]
-    page = min(max(0, page), max(0, (len(matches) - 1) // 8))
-    buttons = [_button(f"{sid} · {student.display_name}"[:40], action("admin_student", student=sid, date=day), margin="none") for sid, student in matches[page * 8:(page + 1) * 8]]
+    query = search_query(query)
+    search = search_button(day, query=query)
+    navigation = [search, date_button("admin_students", day), _button("Back to Status", action("admin_attendance", date=day), margin="none")]
+    if not query:
+        return card("Find Student", [paragraph("Tap Search, enter a student ID or any part of their Chinese, English, or LINE name, then send.")], navigation, subtitle=day.isoformat())
+    matches = db.search_active_students(query)
+    page_size = 5
+    page = min(max(0, page), max(0, (len(matches) - 1) // page_size))
+    buttons = [search]
+    buttons.extend(_button(f"{student['student_id']} · {student.get('chinese_name') or student.get('name') or student.get('full_name')}"[:40], action("admin_student", student=student["student_id"], date=day), margin="none") for student in matches[page * page_size:(page + 1) * page_size])
     if page:
-        buttons.append(_button("Previous Students", action("admin_students", page=page - 1, date=day, query=query), margin="none"))
-    if (page + 1) * 8 < len(matches):
-        buttons.append(_button("Next Students", action("admin_students", page=page + 1, date=day, query=query), margin="none"))
-    buttons.append({"type": "button", "style": "secondary", "action": {"type": "postback", "label": "Search Student", "data": action("admin_search", date=day), "inputOption": "openKeyboard", "fillInText": f"/adminfind {day.isoformat()} "}})
+        buttons.append(_button("Previous Matches", action("admin_students", page=page - 1, date=day, query=query), margin="none"))
+    if (page + 1) * page_size < len(matches):
+        buttons.append(_button("More Matches", action("admin_students", page=page + 1, date=day, query=query), margin="none"))
     buttons.append(_button("Back to Status", action("admin_attendance", date=day), margin="none"))
-    return card("Choose Student", [paragraph("Select a student, then choose the attendance date and status.")], buttons, subtitle=f"{day.isoformat()} · {len(matches)} student(s) · Page {page + 1}")
+    return card("Search Results", [paragraph(f'{len(matches)} match(es) for "{query}". Choose a student.' if matches else f'No students matched "{query}". Try another name or ID.')], buttons, subtitle=f"{day.isoformat()} · Page {page + 1}")
 
 
 def student_message(student, day, ticket_id=None):
     entries = db.get_monthly_report_entries(str(student["student_id"]), day)
+    name = str(student.get("chinese_name") or student["name"])
+    cancel = action("admin_ticket", ticket=ticket_id) if ticket_id else action("admin_students", date=day)
     if day not in entries:
-        raise ValueError("This date is not in the Monthly Report schedule. Choose a scheduled date.")
+        return card("Choose a Workday", [_stat_row("Student Name", name, margin="md"), paragraph("This date is not scheduled. Choose the attendance date to continue.")], [date_button("admin_student", day, student=student["student_id"], ticket=ticket_id), _button("Back", cancel, margin="none")], subtitle=day.isoformat())
     current = entries[day] or ("Present" if day < today() else "Pending")
-    buttons = [date_button("admin_student", day, student=student["student_id"], ticket=ticket_id)]
-    buttons.extend(_button(label, action("admin_preview", student=student["student_id"], date=day, status=key, ticket=ticket_id), margin="none") for key, (label, value) in STATUSES.items())
-    buttons.append(_button("Cancel", action("admin_ticket", ticket=ticket_id) if ticket_id else action("admin_attendance", date=day), margin="none"))
+    short_labels = {"present": "Present", "sick": "Sick Leave", "personal": "Personal", "menstrual": "Menstrual", "annual": "Annual · Paid", "half": "Half Day", "late": "Late", "absent": "Absent", "pending": "Pending"}
+    choices = []
+    for key in STATUSES:
+        button = _button(short_labels[key], action("admin_preview", student=student["student_id"], date=day, status=key, ticket=ticket_id), margin="none")
+        button["flex"] = 1
+        button["adjustMode"] = "shrink-to-fit"
+        choices.append(button)
+    grid = []
+    for offset in range(0, len(choices), 2):
+        pair = choices[offset:offset + 2]
+        if len(pair) == 1:
+            pair.append({"type": "box", "layout": "vertical", "flex": 1, "contents": []})
+        grid.append({"type": "box", "layout": "horizontal", "spacing": "sm", "margin": "sm", "contents": pair})
     return card("Edit Attendance", [
-        _stat_row("Student Name", str(student.get("chinese_name") or student["name"]), margin="md"),
+        _stat_row("Student Name", name, margin="md"),
         _stat_row("Student ID", str(student["student_id"]), margin="xs"),
         _stat_row("Current Status", current, margin="xs"),
-        paragraph("Present removes leave and restores attendance. Annual leave is paid. Changes require confirmation."),
-    ], buttons, subtitle=day.isoformat())
+        paragraph("Choose a status. Present clears leave; annual leave is paid. You'll preview before saving."),
+        *grid,
+    ], [date_button("admin_student", day, student=student["student_id"], ticket=ticket_id), _button("Back to Ticket" if ticket_id else "Find Another Student", cancel, margin="none")], subtitle=day.isoformat())
 
 
 def _snapshot(student_id, day, ticket_id):
@@ -245,6 +279,8 @@ def handle_postback(data, actor, params=None, notify=None):
         raise ValueError("This workspace is available to administrators only.")
     get = lambda key, default="": data.get(key, [default])[0]
     name = get("action")
+    if name not in {"admin_search", "admin_timeout_bus_search"}:
+        clear_search(actor)
     selected = (params or {}).get("date") or get("date") or today().isoformat()
     day = date.fromisoformat(selected)
     ticket_id = get("ticket") or None
@@ -289,7 +325,8 @@ def handle_postback(data, actor, params=None, notify=None):
     if name == "admin_students":
         return students_message(day, int(get("page", "0")), get("query") or None)
     if name == "admin_search":
-        return card("Search Students", [paragraph(f"Type /adminfind {day.isoformat()} followed by a student ID or name, then send.")])
+        begin_search(actor, day)
+        return card("Search Students", [paragraph("Type a student name or ID in the typing area and send. Search is active for five minutes.")], [_button("Cancel Search", action("admin_students", date=day), margin="none")], subtitle=day.isoformat())
     student = db.find_student_by_id(get("student"))
     if not student:
         raise ValueError("Student not found or name is ambiguous.")

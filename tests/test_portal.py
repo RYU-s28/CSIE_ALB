@@ -1574,3 +1574,86 @@ class TestOfficialReportsGoToGroup(TestCase):
         from attendance.report import GroupReportText
         with patch("database.google_sheets.get_report_students", return_value=({}, 0)), patch("bot.commands._records_for_date", return_value=[]), patch("attendance.time_out.save_morning"):
             self.assertIsInstance(_report_data(date(2026, 10, 11), summary=False), GroupReportText)
+
+
+class TestSearchFirstAdminCards(TestCase):
+    def test_initial_picker_does_not_load_or_show_all_students(self):
+        from bot.admin_portal import students_message
+        with patch("database.google_sheets.search_active_students") as search, patch("database.google_sheets.get_report_students") as roster:
+            result = students_message(date(2026, 10, 14))
+        search.assert_not_called()
+        roster.assert_not_called()
+        buttons = result.contents.data["footer"]["contents"]
+        self.assertEqual(buttons[0]["action"]["inputOption"], "openKeyboard")
+        self.assertEqual(len(buttons), 3)
+        self.assertNotIn("Page", result.alt_text)
+
+    def test_search_matches_chinese_english_line_names_and_id(self):
+        from database.google_sheets import search_active_students
+        records = [
+            {"student_id": "S06494", "chinese_name": "奎姐兒", "full_name": "Dharls Inobao Quinto", "display_name": "奎姐兒/dharls"},
+            {"student_id": "S06505", "chinese_name": "華凌智", "full_name": "Another Student", "display_name": "Other"},
+            {"student_id": "S99999", "full_name": "Dharls", "active": "FALSE"},
+        ]
+        with patch("database.google_sheets._read_students_records", return_value=records):
+            for query in ("奎姐", "DHARLS", "Quinto", "s06494", "奎姐兒/dharls"):
+                with self.subTest(query=query):
+                    self.assertEqual([row["student_id"] for row in search_active_students(query)], ["S06494"])
+            self.assertEqual(search_active_students("Missing"), [])
+
+    def test_results_show_five_matches_and_preserve_date(self):
+        from bot.admin_portal import students_message
+        from urllib.parse import parse_qs
+        matches = [{"student_id": str(i), "chinese_name": "Name", "name": "Name"} for i in range(8)]
+        day = date(2026, 10, 23)
+        with patch("database.google_sheets.search_active_students", return_value=matches):
+            result = students_message(day, query="Name")
+        buttons = result.contents.data["footer"]["contents"]
+        choices = [button for button in buttons if parse_qs(button["action"].get("data", "")).get("action") == ["admin_student"]]
+        self.assertEqual(len(choices), 5)
+        for button in choices:
+            self.assertEqual(parse_qs(button["action"]["data"])["date"], [day.isoformat()])
+        self.assertIn("More Matches", [button["action"]["label"] for button in buttons])
+
+    def test_status_choices_are_in_compact_two_column_grid(self):
+        from bot.admin_portal import student_message, STATUSES
+        from urllib.parse import parse_qs
+        student = {"student_id": "S06505", "name": "華凌智"}
+        day = date(2026, 10, 14)
+        with patch("database.google_sheets.get_monthly_report_entries", return_value={day: "事假"}):
+            result = student_message(student, day)
+        rows = [row for row in result.contents.data["body"]["contents"] if row.get("layout") == "horizontal" and any(child.get("type") == "button" for child in row.get("contents", []))]
+        self.assertEqual(len(rows), 5)
+        buttons = [button for row in rows for button in row["contents"] if button.get("type") == "button"]
+        self.assertEqual({parse_qs(button["action"]["data"])["status"][0] for button in buttons}, set(STATUSES))
+        self.assertEqual(len(result.contents.data["footer"]["contents"]), 2)
+
+    def test_missing_scheduled_date_opens_picker_instead_of_error(self):
+        from bot.admin_portal import student_message
+        with patch("database.google_sheets.get_monthly_report_entries", return_value={date(2026, 10, 14): ""}):
+            result = student_message({"student_id": "S06505", "name": "Student"}, date(2026, 10, 12))
+        self.assertIn("Choose a Workday", result.alt_text)
+        self.assertEqual(result.contents.data["footer"]["contents"][0]["action"]["type"], "datetimepicker")
+
+    def test_search_context_is_private_per_user_one_query_and_expires(self):
+        from bot.search_context import begin_search, consume_search
+        day = date(2026, 10, 23)
+        with patch("bot.search_context.monotonic", return_value=100):
+            begin_search("Uone", day)
+            self.assertIsNone(consume_search("Uother"))
+            self.assertEqual(consume_search("Uone").day, day)
+            self.assertIsNone(consume_search("Uone"))
+            begin_search("Uexpired", day, bus=True)
+        with patch("bot.search_context.monotonic", return_value=401):
+            self.assertIsNone(consume_search("Uexpired"))
+
+    def test_search_button_starts_context_without_command_prefix(self):
+        from bot.admin_portal import handle_postback
+        from bot.search_context import consume_search
+        day = date(2026, 10, 23)
+        with patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin"}):
+            result = handle_postback({"action": ["admin_search"], "date": [day.isoformat()]}, "Uadmin")
+            self.assertIn("Search Students", result.alt_text)
+            context = consume_search("Uadmin")
+        self.assertEqual(context.day, day)
+        self.assertFalse(context.bus)

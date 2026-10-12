@@ -293,3 +293,22 @@ PNG. PNG is preferred when both PNG and JPEG assets exist. Menu cache identity
 includes the image content and button definitions, so changes to labels or
 actions also trigger a refresh. Image preparation and LINE API failures are
 reported in server logs; `/setuprichmenu` reports which role failed.
+
+## Search-first admin editing
+
+Student selection opens with a compact Search card instead of the entire roster.
+Tap **Search name or student ID**, type a name or ID, and send. The next private
+message is treated as a search for the selected attendance date; no command is
+needed. The one-query search session expires after five minutes and is canceled
+when another admin action or command is selected. Search matches IDs, Chinese
+names, full English names, and LINE display names. Results show at most five
+matching students per card; refine the query instead of paging through everyone.
+
+Attendance status choices use a two-column grid. Selecting a non-scheduled date
+opens a date picker rather than making the admin backtrack through chat history.
+The no-bus picker also uses search and a short summary of current exceptions.
+
+LINE Flex cards do not support editable text inputs. Search opens LINE's typing
+area; a real input field inside an interactive page would require a separate
+LINE webview/LIFF app. Existing `/adminfind` and `/busfind` commands remain valid
+as desktop fallbacks when keyboard opening is unavailable.

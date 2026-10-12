@@ -513,6 +513,23 @@ def handle_message(event):
         print("USER MENU SYNC ERROR:", type(error).__name__)
     requested_command = normalize_command(text)
     if is_admin_user(user_id):
+        if is_private_chat and text.strip() and not text.lstrip().startswith("/"):
+            from bot.search_context import consume_search
+            search = consume_search(user_id)
+            if search:
+                try:
+                    if search.bus:
+                        from bot.time_out_portal import bus_message
+                        result = bus_message(search.day, query=text.strip())
+                    else:
+                        result = admin_portal.students_message(search.day, query=text.strip())
+                    reply_to_line(event.reply_token, result)
+                except (ValueError, RuntimeError) as error:
+                    reply_to_line(event.reply_token, str(error))
+                return
+        if requested_command:
+            from bot.search_context import clear_search
+            clear_search(user_id)
         if requested_command in {"hello", "start", "init", "menu", "help", "helpcenter", "tickets", "leaverequest", "request"}:
             action_name = "admin_tickets" if requested_command in {"helpcenter", "tickets"} else "admin_attendance" if requested_command in {"leaverequest", "request"} else "admin_portal"
             try:
@@ -532,7 +549,7 @@ def handle_message(event):
             except (ValueError, RuntimeError) as error:
                 reply_to_line(event.reply_token, str(error))
             return
-        if requested_command == "adminfind":
+        if requested_command in {"adminfind", "busfind"}:
             query = text.partition(" ")[2].strip()
             search_day = _today_taipei()
             try:
@@ -540,7 +557,12 @@ def handle_message(event):
                 if re.fullmatch(r"\d{4}-\d{2}-\d{2}", first):
                     search_day = date.fromisoformat(first)
                     query = remaining.strip()
-                reply_to_line(event.reply_token, admin_portal.students_message(search_day, query=query))
+                if requested_command == "busfind":
+                    from bot.time_out_portal import bus_message
+                    result = bus_message(search_day, query=query)
+                else:
+                    result = admin_portal.students_message(search_day, query=query)
+                reply_to_line(event.reply_token, result)
             except (ValueError, RuntimeError) as error:
                 reply_to_line(event.reply_token, str(error))
             return

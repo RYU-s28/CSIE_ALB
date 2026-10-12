@@ -1,5 +1,5 @@
 """Admin-only bus exception selection and confirmed plain-text return reports."""
-from attendance.report import DailyReportText
+from attendance.report import DailyReportText, GroupReportText
 from attendance import time_out
 from bot.admin_portal import action, card, date_button, paragraph, signed_action, verify_action, today
 from bot.line_ui import DEDUCTION_RED, _button, _stat_row
@@ -77,7 +77,7 @@ def preview_message(day, actor, returned=None):
         _stat_row("Expected Return", str(state["expected_return"]), margin="xs"),
         _stat_row("回到學校", str(returned), margin="xs"),
         paragraph("Confirm only after checking that everyone listed for the bus has returned to school." if complete else f"{state['expected_return'] - returned} expected passenger(s) have not yet been confirmed returned. This report will remain incomplete."),
-        paragraph("The saved report will be sent privately as plain text, with the morning leave list and 回到學校 appended."),
+        paragraph("The confirmed report will be posted as plain text to the configured group chat, with the morning leave list and 回到學校 appended."),
     ], [
         _button("Confirm Everyone Returned" if complete else "Confirm Partial Return", confirm, color=DEDUCTION_RED, margin="none"),
         _button("Cancel", action("admin_timeout", date=day), margin="none"),
@@ -98,7 +98,7 @@ def handle_time_out(data, actor, day):
         from scheduler.work_calendar import is_workday
         if not is_workday(day):
             raise ValueError("This is a rest day. There is no bus return report to capture.")
-        return DailyReportText(time_out.capture_current_morning(day)["report"])
+        return GroupReportText(time_out.capture_current_morning(day)["report"])
     if name == "admin_timeout_morning":
         state = time_out.get_state(day)
         return DailyReportText(state["morning"]["report"]) if state else timeout_message(day)
@@ -114,5 +114,5 @@ def handle_time_out(data, actor, day):
         return preview_message(day, actor, int(raw) if raw else None)
     if name == "admin_timeout_confirm":
         verify_action(actor, data)
-        return time_out.confirm_return(day, int(get("returned")), actor, get("snapshot"))
+        return GroupReportText(time_out.confirm_return(day, int(get("returned")), actor, get("snapshot")))
     raise ValueError("Unknown Time Out Report action.")

@@ -14,7 +14,7 @@ from linebot.v3.messaging import FlexMessage
 
 from attendance.attendance import AttendanceRecord, AttendanceTracker
 from attendance.leave_message import LEAVE_TYPE_LABELS
-from attendance.report import StudentDisplay, build_report
+from attendance.report import StudentDisplay, build_report, GroupReportText
 from attendance.salary import calculate_salary
 from database import google_sheets
 from scheduler.work_calendar import is_workday
@@ -173,7 +173,7 @@ def _report_data(target_date: date, *, summary: bool) -> str:
     )
     from attendance.time_out import save_morning
     save_morning(target_date, report, records, students, expected)
-    return report
+    return GroupReportText(report)
 
 
 def _run_admin_command(tokens: list[str], actor: str) -> str:

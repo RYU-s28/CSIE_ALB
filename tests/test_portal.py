@@ -877,15 +877,16 @@ class TestPrivateCardDelivery(TestCase):
         displayed = "".join(item["text"] for bubble in data["contents"] for item in bubble["body"]["contents"] if item.get("text") != "CSIE Student" and "text" in item)
         self.assertEqual(displayed, text)
 
-    def test_daily_report_only_goes_to_private_administrator_ids(self):
+    def test_daily_report_goes_to_configured_group(self):
         import importlib
         with patch.dict(sys.modules, {"apscheduler": MagicMock(), "apscheduler.schedulers": MagicMock(), "apscheduler.schedulers.background": MagicMock()}):
             jobs = importlib.import_module("scheduler.daily_report")
         with patch.object(jobs, "is_workday", return_value=True), patch.object(
             jobs, "generate_daily_report", return_value="Class report"
-        ), patch("bot.commands._admin_ids", return_value={"Uadmin", "Cgroup"}), patch("app.push_to_line") as push:
+        ), patch("app.send_report_to_group", return_value=True) as send, patch("app.push_to_line") as private:
             jobs.daily_attendance_job()
-        push.assert_called_once_with("Uadmin", "Class report")
+        send.assert_called_once_with("Class report")
+        private.assert_not_called()
 
 
 class TestTicketCodeIsInert(TestCase):
@@ -1517,3 +1518,59 @@ class TestRichMenuImageSync(TestCase):
         with patch.object(menus, "prepare_menu_image", side_effect=ValueError("Invalid image")), patch.object(menus, "MessagingApi") as api:
             self.assertIsNone(menus.setup_rich_menu())
             api.assert_not_called()
+
+
+class TestOfficialReportsGoToGroup(TestCase):
+    def test_group_report_is_plain_text_and_uses_only_configured_group(self):
+        from app import send_report_to_group
+        from attendance.report import GroupReportText
+        from types import SimpleNamespace
+        report = GroupReportText("應到人數：41\n實到人數：23\n\n回到學校：22")
+        with patch.dict(os.environ, {"LINE_REPORT_GROUP_ID": "Cconfigured"}), patch("app.ApiClient"), patch("app.MessagingApi") as api, patch(
+            "app.PushMessageRequest", side_effect=lambda **args: SimpleNamespace(**args)
+        ), patch("app.TextMessage", side_effect=lambda text: SimpleNamespace(text=text)), patch("app.response_card_message") as cards, patch("app.localize_message") as translate:
+            self.assertTrue(send_report_to_group(report))
+            request = api.return_value.push_message.call_args.kwargs["push_message_request"]
+            self.assertEqual(request.to, "Cconfigured")
+            self.assertEqual(request.messages[0].text, report)
+            cards.assert_not_called()
+            translate.assert_not_called()
+
+    def test_issued_report_posts_to_group_and_acknowledges_admin_privately(self):
+        from app import reply_to_line
+        from attendance.report import GroupReportText
+        from bot.delivery import destination, ReplyDestination
+        report = GroupReportText("Report\n回到學校：22")
+        token = destination.set(ReplyDestination("Uadmin", False))
+        try:
+            with patch("app.send_report_to_group", return_value=True) as group, patch("app.push_to_line", return_value=True) as private, patch("app.ApiClient") as public_reply:
+                self.assertTrue(reply_to_line("PUBLIC_TOKEN", report))
+                group.assert_called_once_with(report)
+                private.assert_called_once_with("Uadmin", "Report sent to the configured group chat.")
+                public_reply.assert_not_called()
+        finally:
+            destination.reset(token)
+
+    def test_missing_group_config_has_no_public_fallback(self):
+        from app import send_report_to_group
+        with patch.dict(os.environ, {"LINE_REPORT_GROUP_ID": ""}), patch("app.ApiClient") as api:
+            self.assertFalse(send_report_to_group("Report"))
+            api.assert_not_called()
+
+    def test_failed_group_delivery_notifies_admin_without_claiming_success(self):
+        from app import reply_to_line
+        from attendance.report import GroupReportText
+        from bot.delivery import destination, ReplyDestination
+        token = destination.set(ReplyDestination("Uadmin", False))
+        try:
+            with patch("app.send_report_to_group", return_value=False), patch("app.push_to_line", return_value=True) as private:
+                reply_to_line("PUBLIC_TOKEN", GroupReportText("Report"))
+                self.assertIn("could not be sent", private.call_args.args[1])
+        finally:
+            destination.reset(token)
+
+    def test_manual_report_is_marked_for_group_publication(self):
+        from bot.commands import _report_data
+        from attendance.report import GroupReportText
+        with patch("database.google_sheets.get_report_students", return_value=({}, 0)), patch("bot.commands._records_for_date", return_value=[]), patch("attendance.time_out.save_morning"):
+            self.assertIsInstance(_report_data(date(2026, 10, 11), summary=False), GroupReportText)

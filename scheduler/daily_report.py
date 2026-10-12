@@ -62,17 +62,13 @@ def daily_attendance_job() -> None:
         print(f"{today}: No work scheduled. Attendance report skipped.")
         return
 
-    from bot.commands import _admin_ids
-    from app import push_to_line
-    recipients = {user_id for user_id in _admin_ids() if user_id.startswith("U")}
-    if not recipients:
-        print("No administrator LINE user IDs configured; private daily report skipped.")
-        return
+    from app import send_report_to_group
     try:
         report = generate_daily_report(today)
-        for user_id in recipients:
-            push_to_line(user_id, report)
-        print(f"{today}: Daily attendance report processed for private administrator delivery.")
+        if send_report_to_group(report):
+            print(f"{today}: Morning attendance report sent to the configured group.")
+        else:
+            print(f"{today}: Morning attendance report was not delivered to the group.")
     except Exception as error:
         print("DAILY ATTENDANCE REPORT ERROR:", type(error).__name__)
 

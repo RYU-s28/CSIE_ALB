@@ -31,7 +31,7 @@ from linebot.v3.webhooks import (
 )
 
 from attendance.attendance import AttendanceTracker
-from attendance.report import DailyReportText
+from attendance.report import DailyReportText, GroupReportText
 from attendance.ai_classifier import classify_attendance_message
 from attendance.leave_message import (
     LEAVE_TYPE_LABELS,
@@ -188,6 +188,9 @@ def reply_to_line(reply_token: str, message: str | FlexMessage):
     if target is None:
         print("LINE RESPONSE SKIPPED: no event destination.")
         return False
+    if isinstance(message, GroupReportText):
+        sent = send_report_to_group(message)
+        message = "Report sent to the configured group chat." if sent else "The report was prepared, but could not be sent to the group. Check LINE_REPORT_GROUP_ID and the bot's group access, then retry."
     if not target.private:
         # Group/room tokens would post publicly; push only to the sender.
         return push_to_line(target.user_id, message) if target.user_id else False
@@ -241,6 +244,27 @@ def push_to_line(user_id: str, message: str | FlexMessage) -> bool:
         return True
     except Exception as error:
         print("LINE PUSH ERROR:", repr(error))
+        return False
+
+
+def send_report_to_group(report: DailyReportText) -> bool:
+    """Post only official plain-text reports to the configured report group."""
+    group_id = os.getenv("LINE_REPORT_GROUP_ID", "").strip()
+    if not group_id.startswith("C"):
+        print("GROUP REPORT SKIPPED: LINE_REPORT_GROUP_ID is missing or is not a group ID.")
+        return False
+    try:
+        with ApiClient(configuration) as client:
+            api = MessagingApi(client)
+            text = str(report)
+            chunks = [text[index:index + 4900] for index in range(0, len(text), 4900)] or [text]
+            for start in range(0, len(chunks), 5):
+                api.push_message(push_message_request=PushMessageRequest(
+                    to=group_id, messages=[TextMessage(text=chunk) for chunk in chunks[start:start + 5]],
+                ))
+        return True
+    except Exception as error:
+        print("GROUP REPORT SEND ERROR:", type(error).__name__)
         return False
 
 

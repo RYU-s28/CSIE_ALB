@@ -55,9 +55,10 @@ proceed through the existing identity, date, and Google Sheets flow.
 Set `ADMIN_LINE_USER_IDS` to a comma-separated list of administrator LINE
 Messaging API user IDs (the permanent `U...` IDs, not display names). Only those
 accounts can use administrative commands.
-The app sends scheduled daily reports privately to `ADMIN_LINE_USER_IDS` at
-7:00 Asia/Taipei on accepted workdays. `LINE_REPORT_GROUP_ID` is no longer
-used. If no administrator user IDs are configured, reporting is skipped.
+Set `LINE_REPORT_GROUP_ID` to the `C...` LINE group ID for official reports.
+The app posts the morning report there at 7:00 Asia/Taipei on accepted workdays.
+Issued `/report` and `/summary` reports and confirmed Time Out Reports also post
+there as plain text. The bot must be a member of that group.
 
 All bot commands start with `/` to distinguish them from ordinary chat.
 Students can use `/hello`, `/statusme [date]`, `/clear [date]`,
@@ -125,7 +126,7 @@ or send `/language` or `/settings` in a private chat. Choose **English** or
 English is the default. AI translates visible private reply text and Flex cards
 using `GEMINI_API_KEY`; IDs and button action data remain unchanged. Translations
 are cached in memory. If translation fails, the original message is sent.
-Scheduled administrator reports use each administrator’s selected language. The fixed LINE rich-menu image
+Official group reports preserve their original Chinese plain-text format. The fixed LINE rich-menu image
 is not translated.
 
 The separate automatic friend greeting is configured in LINE Official Account
@@ -186,7 +187,7 @@ separate carousel of readable bubbles. Language settings remain available with
 
 ## Private responses and ticket handling
 
-All event responses stay private. Group and room events push response cards to
+Portal, ticket, and attendance-notice responses stay private. Group and room events push response cards to
 the sender's LINE user ID; private chats use their private reply token. Error
 messages and confirmations follow the same routing. No public
 acknowledgments or group fallback messages are sent. If a private push cannot be
@@ -194,8 +195,8 @@ delivered, the error is logged and nothing is posted publicly. Students should
 add the bot as a friend and unblock it to receive private messages.
 
 Plain-text responses use readable Flex cards; existing specialized cards retain
-their layouts. Scheduled class reports are delivered only to configured
-administrator LINE user IDs, never group IDs.
+their layouts. Official morning and confirmed Time Out Reports are the explicit exception:
+they post as plain text to `LINE_REPORT_GROUP_ID`.
 
 Ticket bodies are untrusted literal text, limited to 4,000 characters, and saved
 with Google Sheets `RAW` input. They do not run through Python `eval`, `exec`,
@@ -275,8 +276,9 @@ means 22 expected returns. The confirmation records the count, administrator,
 and timestamp in `Time Out Reports`; partial returns do not mark everyone home.
 
 Confirmations are signed, expire after ten minutes, and are invalidated if the
-bus selection or saved report changes. Reports remain private so the admin can
-copy the plain text into the group when ready.
+bus selection or saved report changes. Confirmed reports post as plain text to
+`LINE_REPORT_GROUP_ID`; the admin receives a private delivery acknowledgment.
+Preview cards and viewing a saved morning report remain private.
 
 ## Refreshing edited rich menu artwork
 

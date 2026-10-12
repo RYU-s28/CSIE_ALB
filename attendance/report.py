@@ -12,6 +12,10 @@ class DailyReportText(str):
     """Daily report text that must keep its original LINE text format."""
 
 
+class GroupReportText(DailyReportText):
+    """An issued official report destined for LINE_REPORT_GROUP_ID."""
+
+
 STATUS_LABELS = {
     "personal_leave": "事假",
     "sick_leave": "病假",

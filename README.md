@@ -55,10 +55,9 @@ proceed through the existing identity, date, and Google Sheets flow.
 Set `ADMIN_LINE_USER_IDS` to a comma-separated list of administrator LINE
 Messaging API user IDs (the permanent `U...` IDs, not display names). Only those
 accounts can use administrative commands.
-Set `LINE_REPORT_GROUP_ID` to the LINE group ID where scheduled reports should
-be pushed. The app schedules a daily report at 7:00 Asia/Taipei on dates
-accepted by the work calendar; if no destination is configured, it logs that
-the report was skipped.
+The app sends scheduled daily reports privately to `ADMIN_LINE_USER_IDS` at
+7:00 Asia/Taipei on accepted workdays. `LINE_REPORT_GROUP_ID` is no longer
+used. If no administrator user IDs are configured, reporting is skipped.
 
 All bot commands start with `/` to distinguish them from ordinary chat.
 Students can use `/hello`, `/statusme [date]`, `/clear [date]`,
@@ -126,7 +125,7 @@ or send `/language` or `/settings` in a private chat. Choose **English** or
 English is the default. AI translates visible private reply text and Flex cards
 using `GEMINI_API_KEY`; IDs and button action data remain unchanged. Translations
 are cached in memory. If translation fails, the original message is sent.
-Group reports retain their existing language. The fixed LINE rich-menu image
+Scheduled administrator reports use each administrator’s selected language. The fixed LINE rich-menu image
 is not translated.
 
 The separate automatic friend greeting is configured in LINE Official Account
@@ -143,7 +142,7 @@ initialization card is the first message.
 
 On first contact, a unique active roster-name match automatically saves the
 sender's LINE user ID in the Students sheet. The initialization card ends with
-**Authorize & Connect Account**. Tapping it in a private chat rechecks the sender's
+**Authorize**. Tapping it in a private chat rechecks the sender's
 identity, connects the account if possible, and records the student ID, LINE user
 ID, Taipei timestamp, and terms version in `Account Authorizations`. Repeated
 taps preserve the original timestamp. Unmatched, duplicate-name, and conflicting
@@ -154,9 +153,10 @@ buttons use the same saved authorization flow.
 ## Spam protection and editable leave drafts
 
 Message, follow, and postback events share a per-LINE-user rolling limit of
-2 accepted requests per second and 20 per minute. Excess requests stop before
-student lookup, AI classification, and writes. A slowdown notice is sent at most
-once every 10 seconds. Webhook event IDs are remembered for five minutes to
+1 accepted request per second and 20 per minute. Excess requests are silently
+ignored before student lookup, AI classification, and writes. No extra slowdown
+reply is sent. The limit uses LINE event timestamps so rapid messages remain
+one burst even when webhook processing is delayed by slow Sheets calls. Webhook event IDs are remembered for five minutes to
 prevent duplicate delivery processing. Limits are thread-safe and bounded in
 memory per bot process; they reset on restart and are not shared across replicas.
 
@@ -176,3 +176,35 @@ Identity fields on cards are preserved verbatim during AI translation, including
 LINE names for unmatched accounts. Embedded names are masked before translation.
 Roster matching ignores spaces around `/` (for example, `Name /nickname` matches
 `Name/nickname`) while retaining all name characters and duplicate-name checks.
+
+The initialization card is compact and has no language selector or portal quick
+replies. Its footer contains **Terms & Usage** and a red **Authorize** button.
+Terms & Usage opens the complete supplied policy from `assets/terms.md` in a
+separate carousel of readable bubbles. Language settings remain available with
+`/settings` after initialization. Saved authorizations reference policy version
+`2026-10-12`; earlier generic consent records remain in the sheet.
+
+## Private responses and ticket handling
+
+All event responses stay private. Group and room events push response cards to
+the sender's LINE user ID; private chats use their private reply token. Error
+messages and confirmations follow the same routing. No public
+acknowledgments or group fallback messages are sent. If a private push cannot be
+delivered, the error is logged and nothing is posted publicly. Students should
+add the bot as a friend and unblock it to receive private messages.
+
+Plain-text responses use readable Flex cards; existing specialized cards retain
+their layouts. Scheduled class reports are delivered only to configured
+administrator LINE user IDs, never group IDs.
+
+Ticket bodies are untrusted literal text, limited to 4,000 characters, and saved
+with Google Sheets `RAW` input. They do not run through Python `eval`, `exec`,
+or shell commands. Formula-like ticket text is stored literally as well.
+
+## Paid annual leave (特休)
+
+特休 counts as a full paid attendance day, never an absence. It retains its
+Annual Leave status label and report category, while preserving attendance
+percentage and the full eight-hour salary credit. Future-dated report entries
+are excluded from salary totals until their date arrives, just as future annual
+leave is excluded from month-to-date attendance.

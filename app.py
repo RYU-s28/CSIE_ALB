@@ -38,8 +38,9 @@ from attendance.leave_message import (
 from attendance.salary import calculate_salary
 from bot.language import localize_message, private_language_context
 from bot.rate_limit import rate_limited
+from bot.delivery import destination, private_responses
 from attendance.leave_message import validate_leave_workday, parse_leave_template
-from bot.line_ui import language_settings_message
+from bot.line_ui import language_settings_message, terms_of_use_message, response_card_message
 from database.google_sheets import set_user_language, save_account_authorization
 
 from bot.commands import (
@@ -179,7 +180,16 @@ async def callback(
 # LINE message handler
 # --------------------------------------------------
 def reply_to_line(reply_token: str, message: str | FlexMessage):
+    target = destination.get()
+    if target is None:
+        print("LINE RESPONSE SKIPPED: no event destination.")
+        return False
+    if not target.private:
+        # Group/room tokens would post publicly; push only to the sender.
+        return push_to_line(target.user_id, message) if target.user_id else False
     try:
+        if isinstance(message, str):
+            message = response_card_message(message)
         message = localize_message(message)
         with ApiClient(configuration) as api_client:
             messaging_api = MessagingApi(api_client)
@@ -194,6 +204,7 @@ def reply_to_line(reply_token: str, message: str | FlexMessage):
             messaging_api.reply_message(
                 reply_message_request=reply_request
             )
+        return True
 
     except Exception as error:
         print(
@@ -205,7 +216,11 @@ def reply_to_line(reply_token: str, message: str | FlexMessage):
 def push_to_line(user_id: str, message: str | FlexMessage) -> bool:
     """Send private attendance details without exposing them in a group."""
 
+    if not user_id or not user_id.startswith("U"):
+        return False
     try:
+        if isinstance(message, str):
+            message = response_card_message(message)
         message = localize_message(message, user_id)
         with ApiClient(configuration) as api_client:
             messaging_api = MessagingApi(api_client)
@@ -404,6 +419,7 @@ def resolve_student_from_event(event) -> dict[str, object] | None:
 
 
 @handler.add(FollowEvent)
+@private_responses
 @rate_limited
 def handle_follow(event):
     """Handle new friend follow event with automatic initialization."""
@@ -430,6 +446,7 @@ def handle_follow(event):
     MessageEvent,
     message=TextMessageContent,
 )
+@private_responses
 @rate_limited
 @private_language_context
 def handle_message(event):
@@ -730,6 +747,7 @@ def handle_message(event):
 
 
 @handler.add(PostbackEvent)
+@private_responses
 @rate_limited
 @private_language_context
 def handle_postback(event):
@@ -762,6 +780,10 @@ def handle_postback(event):
     if action in {"help", "hello"}:
         student = resolve_student_from_event(event)
         reply_to_line(event.reply_token, welcome_message(student=student))
+        return
+
+    if action == "view_terms":
+        reply_to_line(event.reply_token, terms_of_use_message())
         return
 
     if action in {"authorize_account", "agree_terms"}:
@@ -838,14 +860,7 @@ def handle_postback(event):
         except Exception as error:
             print("SALARY LOOKUP ERROR:", repr(error))
             msg = "Could not calculate salary estimate. Please contact an administrator."
-        is_private = getattr(event.source, "type", "") == "user"
-        if not is_private:
-            if user_id and push_to_line(user_id, msg):
-                reply_to_line(event.reply_token, "I sent your salary estimate in a private message.")
-            else:
-                reply_to_line(event.reply_token, "For privacy, please open a private chat with CSIE Attendance and choose Salary Inquiry.")
-        else:
-            reply_to_line(event.reply_token, msg)
+        reply_to_line(event.reply_token, msg)
         return
 
     if action == "salary_breakdown":

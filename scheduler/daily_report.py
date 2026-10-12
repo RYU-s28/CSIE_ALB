@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from linebot.v3.messaging import (
-    ApiClient,
-    Configuration,
-    MessagingApi,
-    PushMessageRequest,
-    TextMessage,
-)
+
 
 from attendance.attendance import AttendanceRecord
 from attendance.leave_message import LEAVE_TYPE_LABELS
@@ -69,29 +62,19 @@ def daily_attendance_job() -> None:
         print(f"{today}: No work scheduled. Attendance report skipped.")
         return
 
-    report_group_id = os.getenv("LINE_REPORT_GROUP_ID", "").strip()
-    if not report_group_id:
-        print("LINE_REPORT_GROUP_ID is not configured; daily report not sent.")
+    from bot.commands import _admin_ids
+    from app import push_to_line
+    recipients = {user_id for user_id in _admin_ids() if user_id.startswith("U")}
+    if not recipients:
+        print("No administrator LINE user IDs configured; private daily report skipped.")
         return
-
-    access_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-    if not access_token:
-        print("LINE_CHANNEL_ACCESS_TOKEN is not configured; daily report not sent.")
-        return
-
     try:
         report = generate_daily_report(today)
-        configuration = Configuration(access_token=access_token)
-        with ApiClient(configuration) as api_client:
-            MessagingApi(api_client).push_message(
-                push_message_request=PushMessageRequest(
-                    to=report_group_id,
-                    messages=[TextMessage(text=report)],
-                )
-            )
-        print(f"{today}: Attendance report sent to the configured LINE group.")
+        for user_id in recipients:
+            push_to_line(user_id, report)
+        print(f"{today}: Daily attendance report processed for private administrator delivery.")
     except Exception as error:
-        print("DAILY ATTENDANCE REPORT ERROR:", repr(error))
+        print("DAILY ATTENDANCE REPORT ERROR:", type(error).__name__)
 
 
 def mark_present_job() -> None:

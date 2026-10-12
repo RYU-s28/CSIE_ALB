@@ -572,6 +572,8 @@ def handle_command(
             ticket_id = google_sheets.create_ticket(
                 student_id, user_id, args[0],
             )
+        except ValueError as error:
+            return str(error)
         except RuntimeError as error:
             print("TICKET CREATE ERROR:", repr(error))
             return "Your ticket could not be saved. Please contact an administrator."

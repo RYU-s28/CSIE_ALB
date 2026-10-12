@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -946,7 +948,7 @@ def welcome_message(
                 _stat_row("Leave Request", "/leaverequest", bold=False, margin="xs"),
                 _stat_row("Help Center", "/ticket", bold=False, margin="xs"),
                 _button("Language / 語言", "action=language_settings", margin="md"),
-                _button("Authorize & Connect Account", "action=authorize_account", margin="md"),
+                _button("Authorize", "action=authorize_account", color=DEDUCTION_RED, margin="md"),
             ],
         },
     }
@@ -985,7 +987,7 @@ def initialization_message(
     failure_details = {
         "ambiguous": (
             "More than one active student record matches your LINE name.",
-            "Ask an administrator to correct the duplicate LINE Display Name entries, then tap Authorize & Connect Account again.",
+            "Ask an administrator to correct the duplicate LINE Display Name entries, then tap Authorize again.",
             "Duplicate Names",
         ),
         "conflict": (
@@ -1002,7 +1004,7 @@ def initialization_message(
     failure_reason, failure_steps, failure_label = failure_details.get(error_status, (
         "Your LINE profile name does not match an active student record.",
         f'Ask an administrator to set LINE Display Name in your Students row to "{display_name or "your current LINE profile name"}". '
-        "Alternatively, change your LINE profile name to match the sheet. Then tap Authorize & Connect Account again. "
+        "Alternatively, change your LINE profile name to match the sheet. Then tap Authorize again. "
         "Authorization links a matching record; it does not approve a name mismatch.",
         "Name Not Matched",
     ))
@@ -1010,208 +1012,81 @@ def initialization_message(
     badge_bg = "#D7F2E9" if is_recognized else "#FCE8E6"
     badge_color = "#176B5B" if is_recognized else DEDUCTION_RED
 
-    body_contents: list[dict[str, object]] = [
+    body_contents = [
         {
-            "type": "box",
-            "layout": "horizontal",
-            "alignItems": "center",
+            "type": "box", "layout": "horizontal", "alignItems": "center",
             "contents": [
-                {
-                    "type": "text",
-                    "text": "CSIE Student",
-                    "wrap": True,
-                    "weight": "bold",
-                    "size": "xl",
-                    "color": DARK_GREEN,
-                    "flex": 1,
-                },
+                {"type": "text", "text": "CSIE Student", "weight": "bold", "size": "lg", "color": DARK_GREEN, "flex": 1, "wrap": True},
                 _pill(badge_label, bg=badge_bg, color=badge_color),
             ],
         },
-        {
-            "type": "text",
-            "text": "Account Initialization & Terms",
-            "size": "xs",
-            "color": MUTED_TEXT,
-            "margin": "xs",
-        },
+        {"type": "text", "text": "Welcome to CSIE Attendance Bot.", "size": "sm", "color": DARK_GREEN, "wrap": True, "margin": "md"},
     ]
-
     if is_recognized:
-        body_contents.append({
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": "#FFFFFF",
-            "cornerRadius": "md",
-            "paddingAll": "14px",
-            "margin": "md",
-            "contents": [
-                {
-                    "type": "text",
-                    "text": "Student Identity Recognized",
-                    "weight": "bold",
-                    "size": "sm",
-                    "color": DARK_GREEN,
-                },
-                {
-                    "type": "text",
-                    "text": "Your LINE account has been connected with your CSIE student record in the database.",
-                    "size": "xs",
-                    "color": MUTED_TEXT,
-                    "wrap": True,
-                    "margin": "xs",
-                },
-                {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
-                _stat_row("Student Name", student_name, margin="sm", label_flex=4, value_flex=4),
-                _stat_row("Student ID", student_id, margin="xs", label_flex=4, value_flex=4),
-                _stat_row("LINE Name", display_name or student_name, margin="xs", label_flex=4, value_flex=4),
-                _stat_row("Account Link", "Connected in Database", margin="xs", label_flex=4, value_flex=4),
-            ],
-        })
-
-        body_contents.append({
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": "#FFFFFF",
-            "cornerRadius": "md",
-            "paddingAll": "14px",
-            "margin": "sm",
-            "contents": [
-                {
-                    "type": "text",
-                    "text": "Terms of Use & Privacy Consent",
-                    "weight": "bold",
-                    "size": "sm",
-                    "color": DARK_GREEN,
-                },
-                {
-                    "type": "text",
-                    "text": (
-                        "By tapping Authorize & Connect Account, you confirm the student identity "
-                        "shown above and accept these terms. You authorize CSIE Attendance Bot "
-                        "to use your linked LINE account for attendance, salary estimates, "
-                        "leave requests, and work schedules in accordance with lab policy."
-                    ),
-                    "size": "xs",
-                    "color": MUTED_TEXT,
-                    "wrap": True,
-                    "margin": "xs",
-                },
-                {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
-                {
-                    "type": "text",
-                    "text": (
-                        "• Privacy: Personal attendance and salary details are strictly private.\n"
-                        "• Attendance: Month-to-date rates and leave records are updated automatically.\n"
-                        "• Support: Need corrections or have questions? Use the Help Center."
-                    ),
-                    "size": "xxs",
-                    "color": LABEL_TEXT,
-                    "wrap": True,
-                    "margin": "xs",
-                },
-            ],
-        })
-
+        body_contents.extend([
+            _stat_row("Student Name", student_name, margin="md"),
+            _stat_row("Student ID", student_id, margin="xs"),
+            _stat_row("LINE Name", display_name or student_name, margin="xs"),
+        ])
     else:
-        body_contents.append({
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": "#FFFFFF",
-            "cornerRadius": "md",
-            "paddingAll": "14px",
-            "margin": "md",
-            "contents": [
-                {
-                    "type": "text",
-                    "text": "Account Not Linked",
-                    "weight": "bold",
-                    "size": "sm",
-                    "color": DEDUCTION_RED,
-                },
-                {
-                    "type": "text",
-                    "text": failure_reason,
-                    "size": "xs",
-                    "color": MUTED_TEXT,
-                    "wrap": True,
-                    "margin": "xs",
-                },
-                {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
-                _stat_row("LINE Name", display_name or "Unknown", margin="sm", label_flex=4, value_flex=4),
-                _stat_row("Status", failure_label, margin="xs", value_color=DEDUCTION_RED, label_flex=4, value_flex=4),
-                {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
-                {
-                    "type": "text",
-                    "text": failure_steps,
-                    "size": "xxs",
-                    "color": LABEL_TEXT,
-                    "wrap": True,
-                    "margin": "xs",
-                },
-            ],
-        })
-
-        body_contents.append({
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": "#FFFFFF",
-            "cornerRadius": "md",
-            "paddingAll": "14px",
-            "margin": "sm",
-            "contents": [
-                {
-                    "type": "text",
-                    "text": "Terms & Usage Notice",
-                    "weight": "bold",
-                    "size": "sm",
-                    "color": DARK_GREEN,
-                },
-                {
-                    "type": "text",
-                    "text": (
-                        "CSIE Attendance Bot requires a verified student record to record attendance, "
-                        "process leave requests, and calculate payroll estimates."
-                    ),
-                    "size": "xs",
-                    "color": MUTED_TEXT,
-                    "wrap": True,
-                    "margin": "xs",
-                },
-            ],
-        })
-
-        body_contents.append(_button("❓ Contact Admin / Support", "action=richmenu_help", margin="md"))
-
-    body_contents.append(_button("Language / 語言", "action=language_settings", margin="md"))
-    body_contents.append(_button("Authorize & Connect Account", "action=authorize_account", margin="md"))
-    bubble: dict[str, object] = {
-        "type": "bubble",
-        "size": "mega",
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": CARD_BG,
-            "paddingAll": "20px",
-            "contents": body_contents,
-        },
+        body_contents.extend([
+            _stat_row("LINE Name", display_name or "Unknown", margin="md"),
+            _stat_row("Status", failure_label, margin="xs", value_color=DEDUCTION_RED),
+            {"type": "text", "text": failure_reason, "size": "xs", "color": MUTED_TEXT, "wrap": True, "margin": "sm"},
+            {"type": "text", "text": failure_steps, "size": "xxs", "color": LABEL_TEXT, "wrap": True, "margin": "xs"},
+        ])
+    body_contents.extend([
+        {"type": "separator", "color": DIVIDER_COLOR, "margin": "md"},
+        {"type": "text", "text": "Review Terms & Usage before continuing. By tapping Authorize, you confirm your identity and agree to the terms and service policy.", "size": "xs", "color": MUTED_TEXT, "wrap": True, "margin": "sm"},
+    ])
+    if not is_recognized:
+        body_contents.append(_button("Contact Admin / Support", "action=richmenu_help", margin="sm"))
+    bubble = {
+        "type": "bubble", "size": "mega",
+        "body": {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "paddingAll": "16px", "contents": body_contents},
+        "footer": {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "spacing": "sm", "paddingAll": "16px", "contents": [
+            _button("Terms & Usage", "action=view_terms", color=BUTTON_GREEN, margin="none"),
+            _button("Authorize", "action=authorize_account", color=DEDUCTION_RED, margin="none"),
+        ]},
     }
-
-    alt_text = f"CSIE Student Portal: Account Initialization ({'Recognized' if is_recognized else 'Unmatched'})"
     return FlexMessage(
-        alt_text=alt_text,
+        alt_text=f"CSIE Student: Account Initialization ({'Recognized' if is_recognized else 'Unmatched'})",
         contents=FlexContainer.from_dict(bubble),
-        quick_reply=QuickReply(
-            items=[
-                QuickReplyItem(action=PostbackAction(label="My Attendance", data="action=richmenu_attendance", display_text="My Attendance")),
-                QuickReplyItem(action=PostbackAction(label="Leave History", data="action=richmenu_leave_history", display_text="Leave History")),
-                QuickReplyItem(action=PostbackAction(label="Salary Inquiry", data="action=richmenu_salary", display_text="Salary Inquiry")),
-                QuickReplyItem(action=PostbackAction(label="Work Schedule", data="action=richmenu_schedule", display_text="Work Schedule")),
-                QuickReplyItem(action=PostbackAction(label="Leave Request", data="action=richmenu_leave_request", display_text="Leave Request")),
-                QuickReplyItem(action=PostbackAction(label="Help Center", data="action=richmenu_help", display_text="Help Center")),
-            ]
-        ),
     )
+
+
+def terms_of_use_message() -> FlexMessage:
+    """Display the complete supplied policy in separate, readable bubbles."""
+    policy = (Path(__file__).resolve().parent.parent / "assets" / "terms.md").read_text()
+    paragraphs = []
+    for paragraph in policy.split("\n\n"):
+        paragraph = re.sub(r"^#{1,6}\s*", "", paragraph.strip(), flags=re.MULTILINE)
+        paragraph = paragraph.replace("**", "").replace("*", "")
+        if paragraph and paragraph != "---":
+            paragraphs.extend(paragraph[index:index + 1400] for index in range(0, len(paragraph), 1400))
+    pages = [[]]
+    count = 0
+    for paragraph in paragraphs:
+        if count + len(paragraph) > 2200 and pages[-1]:
+            pages.append([])
+            count = 0
+        pages[-1].append(paragraph)
+        count += len(paragraph)
+    bubbles = []
+    for index, page in enumerate(pages):
+        bubble = {
+            "type": "bubble", "size": "mega",
+            "body": {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "paddingAll": "16px", "contents": [
+                {"type": "text", "text": f"Terms & Usage · {index + 1}/{len(pages)}", "weight": "bold", "size": "md", "color": DARK_GREEN, "wrap": True},
+                *[{"type": "text", "text": paragraph, "size": "xs", "color": LABEL_TEXT, "wrap": True, "margin": "md"} for paragraph in page],
+            ]},
+        }
+        if index == len(pages) - 1:
+            bubble["footer"] = {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "contents": [
+                _button("Authorize", "action=authorize_account", color=DEDUCTION_RED, margin="none"),
+            ]}
+        bubbles.append(bubble)
+    return FlexMessage(alt_text="CSIE Attendance Bot: Terms & Usage", contents=FlexContainer.from_dict({"type": "carousel", "contents": bubbles}))
 
 
 def terms_agreement_confirmed_message(
@@ -1327,3 +1202,29 @@ def language_settings_message() -> FlexMessage:
             },
         }),
     )
+
+
+def response_card_message(text: str) -> FlexMessage:
+    """Format plain responses as readable cards, preserving all supplied text."""
+    sections = []
+    for paragraph in text.split("\n\n"):
+        if paragraph:
+            sections.extend(paragraph[index:index + 1400] for index in range(0, len(paragraph), 1400))
+    pages = [[]]
+    length = 0
+    for section in sections:
+        if length + len(section) > 2800 and pages[-1]:
+            pages.append([])
+            length = 0
+        pages[-1].append(section)
+        length += len(section)
+    bubbles = [{
+        "type": "bubble", "size": "mega",
+        "body": {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "paddingAll": "16px", "contents": [
+            {"type": "text", "text": "CSIE Student", "weight": "bold", "size": "lg", "color": DARK_GREEN, "wrap": True},
+            {"type": "separator", "color": DIVIDER_COLOR, "margin": "sm"},
+            *[{"type": "text", "text": section, "size": "sm", "color": LABEL_TEXT, "wrap": True, "margin": "md"} for section in page],
+        ]},
+    } for page in pages]
+    contents = bubbles[0] if len(bubbles) == 1 else {"type": "carousel", "contents": bubbles}
+    return FlexMessage(alt_text="CSIE Student: " + (text[:280] or "Notification"), contents=FlexContainer.from_dict(contents))

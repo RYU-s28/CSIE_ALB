@@ -6,7 +6,7 @@ from time import monotonic
 
 
 class EventRateLimiter:
-    def __init__(self, per_second=2, per_minute=20, max_users=10000):
+    def __init__(self, per_second=1, per_minute=20, max_users=10000):
         self.per_second = per_second
         self.per_minute = per_minute
         self.max_users = max_users
@@ -14,9 +14,10 @@ class EventRateLimiter:
         self.events = OrderedDict()
         self.lock = Lock()
 
-    def check(self, user_id, event_id=None, now=None):
+    def check(self, user_id, event_id=None, now=None, request_time=None):
         """Return (allowed, notify); duplicates never consume a user's quota."""
         now = monotonic() if now is None else now
+        request_time = now if request_time is None else request_time
         with self.lock:
             while self.events and next(iter(self.events.values())) <= now - 300:
                 self.events.popitem(last=False)
@@ -28,19 +29,23 @@ class EventRateLimiter:
                     self.events.popitem(last=False)
             if not user_id:
                 return False, False
-            times, last_notice = self.users.pop(user_id, (deque(), float("-inf")))
-            while times and times[0] <= now - 60:
+            times = self.users.pop(user_id, deque())
+            while times and times[0] <= request_time - 60:
                 times.popleft()
-            allowed = len(times) < self.per_minute and sum(t > now - 1 for t in times) < self.per_second
-            notify = not allowed and now - last_notice >= 10
+            # Use the sender's LINE event time so a burst remains a burst even
+            # if slow Sheets calls cause the webhook events to be processed later.
+            allowed = (
+                (not times or request_time >= times[-1])
+                and len(times) < self.per_minute
+                and sum(t > request_time - 1 for t in times) < self.per_second
+            )
             if allowed:
-                times.append(now)
-            if notify:
-                last_notice = now
-            self.users[user_id] = (times, last_notice)
+                times.append(request_time)
+            self.users[user_id] = times
             if len(self.users) > self.max_users:
                 self.users.popitem(last=False)
-            return allowed, notify
+            return allowed, False
+
 
 
 limiter = EventRateLimiter()
@@ -51,11 +56,13 @@ def rate_limited(function):
     def wrapped(event):
         user_id = getattr(event.source, "user_id", None)
         event_id = getattr(event, "webhook_event_id", None)
-        allowed, notify = limiter.check(user_id, event_id if isinstance(event_id, str) else None)
+        timestamp = getattr(event, "timestamp", None)
+        request_time = timestamp / 1000 if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool) and timestamp > 0 else None
+        allowed, _ = limiter.check(
+            user_id, event_id if isinstance(event_id, str) else None,
+            request_time=request_time,
+        )
         if not allowed:
-            if notify:
-                from app import reply_to_line
-                reply_to_line(event.reply_token, "You're sending requests too quickly. Please wait a moment and try again.")
             return
         return function(event)
     return wrapped

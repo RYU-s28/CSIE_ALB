@@ -982,6 +982,9 @@ def find_student_by_line_id(line_user_id: str) -> dict[str, object] | None:
 
 
 def create_ticket(student_id: str, line_user_id: str, message: str) -> str:
+    """Store untrusted ticket text literally; never interpret it as code."""
+    if not isinstance(message, str) or not message.strip() or len(message) > 4000:
+        raise ValueError("Ticket messages must contain 1–4000 characters.")
     sheet = _ensure_named_sheet("Tickets", TICKET_HEADERS)
     if sheet is None:
         raise RuntimeError("Tickets worksheet is unavailable.")
@@ -1387,10 +1390,14 @@ def get_monthly_report_entries(
 def get_monthly_attendance_counts(
     student_id: str, target_month: date,
 ) -> tuple[int, int]:
-    """Count explicit full and half attendance cells for salary estimates."""
-    values = [value.casefold() for value in get_monthly_report_entries(student_id, target_month).values()]
+    """Count elapsed paid full days (including 特休) and half days for salary."""
+    today = datetime.now(ZoneInfo("Asia/Taipei")).date()
+    values = [
+        value.casefold() for day, value in get_monthly_report_entries(student_id, target_month).items()
+        if day <= today
+    ]
     return (
-        sum(value in {"出席", "present"} for value in values),
+        sum(value in {"出席", "present", "特休", "annual leave", "special_leave"} for value in values),
         sum(value in {"半天", "half day", "half_day"} for value in values),
     )
 
@@ -1483,6 +1490,7 @@ def get_student_attendance_summary(
         "遲到": "Late", "迟到": "Late", "late": "Late",
         "病假": "Sick Leave", "事假": "Personal Leave",
         "經痛": "Menstrual Leave", "特休": "Annual Leave",
+        "annual leave": "Annual Leave", "special_leave": "Annual Leave",
         "半天": "Half Day", "half day": "Half Day", "half_day": "Half Day",
         "回菲律賓": "Abroad", "待確認": "Pending Review",
         "不坐公交車": "No Bus", "不出來": "Absent", "取消工讀": "Cancelled Work",
@@ -1506,7 +1514,7 @@ def get_student_attendance_summary(
         elif value in {"遲到", "迟到", "late"}:
             late += 1
             attended += 1
-        elif value in {"", "出席", "present", "不坐公交車", "no bus"}:
+        elif value in {"", "出席", "present", "不坐公交車", "no bus", "特休", "annual leave", "special_leave"}:
             attended += 1
         else:
             absent += 1
@@ -1620,6 +1628,8 @@ def set_user_language(user_id: str, language: str) -> None:
     sheet.append_row([user_id, language], value_input_option="RAW")
 
 
+TERMS_VERSION = "2026-10-12"
+
 AUTHORIZATION_HEADERS = ["LINE User ID", "Student ID", "Authorized At", "Terms Version"]
 
 
@@ -1632,9 +1642,9 @@ def save_account_authorization(user_id: str, student_id: str) -> None:
     if sheet is None:
         raise RuntimeError("Google Sheets is unavailable.")
     for row in sheet.get_all_values()[1:]:
-        if len(row) >= 4 and row[0] == user_id and row[1] == student_id and row[3] == "1":
+        if len(row) >= 4 and row[0] == user_id and row[1] == student_id and row[3] == TERMS_VERSION:
             return  # Retain the original consent timestamp on repeated taps.
     sheet.append_row(
-        [user_id, student_id, datetime.now(ZoneInfo("Asia/Taipei")).isoformat(), "1"],
+        [user_id, student_id, datetime.now(ZoneInfo("Asia/Taipei")).isoformat(), TERMS_VERSION],
         value_input_option="RAW",
     )

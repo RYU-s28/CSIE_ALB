@@ -545,8 +545,8 @@ class TestAccountAuthorization(TestCase):
     def test_authorize_button_is_last_for_both_account_states(self):
         for student in (None, {"student_id": "ST101", "name": "Romel"}):
             card = initialization_message(student)
-            button = card.contents.data["body"]["contents"][-1]
-            self.assertEqual(button["action"]["label"], "Authorize & Connect Account")
+            button = card.contents.data["footer"]["contents"][-1]
+            self.assertEqual(button["action"]["label"], "Authorize")
             self.assertEqual(button["action"]["data"], "action=authorize_account")
 
     def test_first_chat_saves_line_id_to_matching_roster_row(self):
@@ -575,7 +575,7 @@ class TestAccountAuthorization(TestCase):
             values = sheet.append_row.call_args.args[0]
             self.assertEqual(values[:2], ["U1", "ST101"])
             self.assertTrue(values[2])
-            self.assertEqual(values[3], "1")
+            self.assertEqual(values[3], "2026-10-12")
             sheet.get_all_values.return_value.append(values)
             save_account_authorization("U1", "ST101")
             sheet.append_row.assert_called_once()
@@ -595,8 +595,8 @@ class TestSpamProtection(TestCase):
         from bot.rate_limit import EventRateLimiter
         limit = EventRateLimiter()
         self.assertEqual(limit.check("U1", "e1", now=0), (True, False))
-        self.assertEqual(limit.check("U1", "e2", now=0.1), (True, False))
-        self.assertEqual(limit.check("U1", "e3", now=0.2), (False, True))
+        self.assertEqual(limit.check("U1", "e2", now=0.1), (False, False))
+        self.assertEqual(limit.check("U1", "e3", now=0.2), (False, False))
         self.assertEqual(limit.check("U1", "e4", now=0.3), (False, False))
         self.assertTrue(limit.check("U2", "e5", now=0.3)[0])
         self.assertTrue(limit.check("U1", "e6", now=1)[0])
@@ -614,7 +614,7 @@ class TestSpamProtection(TestCase):
         limit = EventRateLimiter()
         self.assertTrue(limit.check("U1", "event1", now=0)[0])
         self.assertEqual(limit.check("U1", "event1", now=0.1), (False, False))
-        self.assertTrue(limit.check("U1", "event2", now=0.2)[0])
+        self.assertTrue(limit.check("U1", "event2", now=1)[0])
 
     def test_parallel_requests_share_limit(self):
         from bot.rate_limit import EventRateLimiter
@@ -622,8 +622,8 @@ class TestSpamProtection(TestCase):
         limit = EventRateLimiter()
         with ThreadPoolExecutor(max_workers=8) as pool:
             results = list(pool.map(lambda i: limit.check("U1", str(i), now=0), range(8)))
-        self.assertEqual(sum(allowed for allowed, _ in results), 2)
-        self.assertEqual(sum(notify for _, notify in results), 1)
+        self.assertEqual(sum(allowed for allowed, _ in results), 1)
+        self.assertEqual(sum(notify for _, notify in results), 0)
 
     def test_user_cache_is_bounded(self):
         from bot.rate_limit import EventRateLimiter
@@ -762,3 +762,215 @@ class TestNamesRemainOriginal(TestCase):
         from attendance.student_directory import find_students_by_display_name
         students = [{"student_id": "ST101", "display_name": "Name / nick"}, {"student_id": "ST102", "display_name": "Name/nick"}]
         self.assertEqual(len(find_students_by_display_name(students, "Name/nick")), 2)
+
+
+class TestCompactAuthorizationCard(TestCase):
+    def test_bottom_buttons_and_no_language_option(self):
+        import json
+        from bot.line_ui import DEDUCTION_RED
+        for student in (None, {"student_id": "ST101", "name": "Romel"}):
+            card = initialization_message(student)
+            data = card.contents.data
+            buttons = data["footer"]["contents"]
+            self.assertEqual(buttons[0]["action"]["label"], "Terms & Usage")
+            self.assertEqual(buttons[0]["action"]["data"], "action=view_terms")
+            self.assertEqual(buttons[-1]["action"]["label"], "Authorize")
+            self.assertEqual(buttons[-1]["color"], DEDUCTION_RED)
+            self.assertNotIn("language_settings", json.dumps(data))
+            self.assertNotIn("Terms & Usage Notice", json.dumps(data))
+            self.assertIsNone(card.quick_reply)
+
+    def test_complete_supplied_terms_fit_separate_bubbles(self):
+        import json
+        import re
+        from pathlib import Path
+        from bot.line_ui import terms_of_use_message
+        card = terms_of_use_message()
+        data = card.contents.data
+        self.assertEqual(data["type"], "carousel")
+        bubbles = data["contents"]
+        self.assertLessEqual(len(bubbles), 12)
+        displayed = "\n\n".join(item["text"] for bubble in bubbles for item in bubble["body"]["contents"][1:])
+        policy = (Path(__file__).resolve().parent.parent / "assets" / "terms.md").read_text()
+        for paragraph in policy.split("\n\n"):
+            normalized = re.sub(r"^#{1,6}\s*", "", paragraph.strip(), flags=re.MULTILINE).replace("**", "").replace("*", "")
+            if normalized and normalized != "---":
+                self.assertIn(normalized, displayed)
+        for bubble in bubbles:
+            self.assertLess(len(json.dumps(bubble).encode()), 30000)
+            for item in bubble["body"]["contents"]:
+                self.assertLessEqual(len(item["text"]), 2000)
+        self.assertEqual(bubbles[-1]["footer"]["contents"][-1]["action"]["label"], "Authorize")
+
+
+class TestPrivateCardDelivery(TestCase):
+    def test_group_and_room_responses_never_use_public_tokens(self):
+        from bot.delivery import private_responses
+        from types import SimpleNamespace
+        from app import reply_to_line
+        @private_responses
+        def respond(event):
+            return reply_to_line(event.reply_token, "Private result")
+        for source_type in ("group", "room"):
+            with patch("app.push_to_line", return_value=True) as push, patch("app.ApiClient") as api:
+                event = SimpleNamespace(source=SimpleNamespace(type=source_type, user_id="U1"), reply_token="PUBLIC_TOKEN")
+                respond(event)
+                push.assert_called_once_with("U1", "Private result")
+                api.assert_not_called()
+
+    def test_group_push_failure_has_no_public_fallback(self):
+        from bot.delivery import destination, ReplyDestination
+        from app import reply_to_line
+        token = destination.set(ReplyDestination("U1", False))
+        try:
+            with patch("app.push_to_line", return_value=False), patch("app.ApiClient") as api:
+                self.assertFalse(reply_to_line("PUBLIC_TOKEN", "Sensitive result"))
+                api.assert_not_called()
+        finally:
+            destination.reset(token)
+
+    def test_unknown_sender_is_silent(self):
+        from bot.delivery import destination, ReplyDestination
+        from app import reply_to_line
+        token = destination.set(ReplyDestination(None, False))
+        try:
+            with patch("app.push_to_line") as push, patch("app.ApiClient") as api:
+                self.assertFalse(reply_to_line("PUBLIC_TOKEN", "Error"))
+                push.assert_not_called()
+                api.assert_not_called()
+        finally:
+            destination.reset(token)
+
+    def test_private_reply_is_a_card(self):
+        from bot.delivery import destination, ReplyDestination
+        from app import reply_to_line
+        from types import SimpleNamespace
+        token = destination.set(ReplyDestination("U1", True))
+        try:
+            with patch("app.ApiClient"), patch("app.MessagingApi") as api, patch(
+                "app.localize_message", side_effect=lambda message: message
+            ), patch("app.ReplyMessageRequest", side_effect=lambda **args: SimpleNamespace(**args)):
+                self.assertTrue(reply_to_line("PRIVATE_TOKEN", "Ticket Created\n\nYour request was saved."))
+                request = api.return_value.reply_message.call_args.kwargs["reply_message_request"]
+                self.assertEqual(request.reply_token, "PRIVATE_TOKEN")
+                self.assertEqual(request.messages[0].contents.data["type"], "bubble")
+        finally:
+            destination.reset(token)
+
+    def test_push_accepts_only_user_ids_and_sends_cards(self):
+        from app import push_to_line
+        from types import SimpleNamespace
+        with patch("app.ApiClient"), patch("app.MessagingApi") as api, patch(
+            "app.localize_message", side_effect=lambda message, user_id: message
+        ), patch("app.PushMessageRequest", side_effect=lambda **args: SimpleNamespace(**args)):
+            self.assertFalse(push_to_line("Cgroup", "Sensitive data"))
+            api.assert_not_called()
+            self.assertTrue(push_to_line("U1", "Saved"))
+            request = api.return_value.push_message.call_args.kwargs["push_message_request"]
+            self.assertEqual(request.to, "U1")
+            self.assertEqual(request.messages[0].contents.data["type"], "bubble")
+
+    def test_long_response_card_preserves_all_text(self):
+        from bot.line_ui import response_card_message
+        text = "A" * 6000
+        data = response_card_message(text).contents.data
+        displayed = "".join(item["text"] for bubble in data["contents"] for item in bubble["body"]["contents"] if item.get("text") != "CSIE Student" and "text" in item)
+        self.assertEqual(displayed, text)
+
+    def test_daily_report_only_goes_to_private_administrator_ids(self):
+        import importlib
+        with patch.dict(sys.modules, {"apscheduler": MagicMock(), "apscheduler.schedulers": MagicMock(), "apscheduler.schedulers.background": MagicMock()}):
+            jobs = importlib.import_module("scheduler.daily_report")
+        with patch.object(jobs, "is_workday", return_value=True), patch.object(
+            jobs, "generate_daily_report", return_value="Class report"
+        ), patch("bot.commands._admin_ids", return_value={"Uadmin", "Cgroup"}), patch("app.push_to_line") as push:
+            jobs.daily_attendance_job()
+        push.assert_called_once_with("Uadmin", "Class report")
+
+
+class TestTicketCodeIsInert(TestCase):
+    def test_python_and_formula_payloads_stored_literally(self):
+        from database.google_sheets import create_ticket
+        for payload in ('eval("__import__(\'os\').system(\'echo exploited\')")', '=IMPORTXML("https://example.invalid", "//text()")'):
+            sheet = MagicMock()
+            with patch("database.google_sheets._ensure_named_sheet", return_value=sheet), patch("os.system") as system:
+                create_ticket("ST101", "U1", payload)
+                values = sheet.append_row.call_args.args[0]
+                self.assertEqual(values[4], payload)
+                self.assertEqual(sheet.append_row.call_args.kwargs["value_input_option"], "RAW")
+                system.assert_not_called()
+
+    def test_oversized_ticket_rejected_before_sheet_access(self):
+        from database.google_sheets import create_ticket
+        with patch("database.google_sheets._ensure_named_sheet") as sheet:
+            with self.assertRaises(ValueError):
+                create_ticket("ST101", "U1", "x" * 4001)
+            sheet.assert_not_called()
+
+
+class TestSingleResponseBursts(TestCase):
+    def test_five_attendance_requests_produce_one_response(self):
+        from bot.rate_limit import EventRateLimiter, rate_limited
+        from types import SimpleNamespace
+        response = MagicMock()
+        @rate_limited
+        def handle(event):
+            response("My Attendance")
+        with patch("bot.rate_limit.limiter", EventRateLimiter()), patch("app.reply_to_line") as warning:
+            for i in range(5):
+                handle(SimpleNamespace(source=SimpleNamespace(user_id="U1"), timestamp=100000 + i * 100, webhook_event_id=f"event-{i}"))
+            response.assert_called_once_with("My Attendance")
+            warning.assert_not_called()
+            handle(SimpleNamespace(source=SimpleNamespace(user_id="U1"), timestamp=101000, webhook_event_id="later"))
+            self.assertEqual(response.call_count, 2)
+
+    def test_slow_webhook_processing_does_not_turn_burst_into_five_replies(self):
+        from bot.rate_limit import EventRateLimiter
+        limit = EventRateLimiter()
+        allowed = [limit.check("U1", str(i), now=i * 3, request_time=100 + i * 0.1)[0] for i in range(5)]
+        self.assertEqual(allowed, [True, False, False, False, False])
+
+    def test_out_of_order_requests_do_not_bypass_limit(self):
+        from bot.rate_limit import EventRateLimiter
+        limit = EventRateLimiter()
+        self.assertTrue(limit.check("U1", request_time=100)[0])
+        self.assertEqual(limit.check("U1", request_time=90), (False, False))
+
+
+class TestPaidAnnualLeave(TestCase):
+    def test_annual_leave_counts_as_attended_without_absence(self):
+        entries = {date(2026, 10, 7): "出席", date(2026, 10, 8): "特休", date(2026, 10, 23): "特休"}
+        summary = TestAttendanceCalculation().summary(entries)
+        self.assertEqual(summary["attended_days"], 2)
+        self.assertEqual(summary["absent_days"], 0)
+        self.assertEqual(summary["attendance_pct"], 100)
+        self.assertEqual(summary["remaining_scheduled_workdays"], 1)
+
+    def test_annual_leave_today_keeps_its_label_and_full_attendance(self):
+        summary = TestAttendanceCalculation().summary({date(2026, 10, 14): "特休"}, today=date(2026, 10, 14))
+        self.assertEqual(summary["today_status"], "Annual Leave")
+        self.assertEqual(summary["attendance_pct"], 100)
+        self.assertEqual(summary["absent_days"], 0)
+
+    def test_salary_annual_leave_has_same_pay_as_present(self):
+        from database.google_sheets import get_monthly_attendance_counts
+        day = date(2026, 10, 7)
+        with patch("database.google_sheets.datetime") as clock, patch(
+            "database.google_sheets.get_monthly_report_entries"
+        ) as entries:
+            clock.now.return_value.date.return_value = date(2026, 10, 12)
+            entries.return_value = {day: "出席"}
+            present_pay = calculate_salary(*get_monthly_attendance_counts("ST101", day))
+            entries.return_value = {day: "特休", date(2026, 10, 23): "特休"}
+            annual_pay = calculate_salary(*get_monthly_attendance_counts("ST101", day))
+        self.assertEqual(annual_pay, present_pay)
+        self.assertEqual(annual_pay.total_hours, 8)
+
+    def test_annual_leave_report_does_not_reduce_attending_count(self):
+        from attendance.attendance import AttendanceRecord
+        from attendance.report import build_report
+        report = build_report(report_date=date(2026, 10, 7), total_students=1, expected_students=1, records=[
+            AttendanceRecord(student_id="ST101", status="special_leave", attendance_date=date(2026, 10, 7)),
+        ])
+        self.assertIn("實到人數：1", report)
+        self.assertIn("特休：1人", report)

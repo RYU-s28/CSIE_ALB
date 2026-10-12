@@ -26,7 +26,6 @@ ABSENT_STATUSES = {
     "personal_leave",
     "sick_leave",
     "menstrual_leave",
-    "special_leave",
     "half_day",
     "abroad",
     "not_coming",

@@ -248,3 +248,32 @@ Daily attendance report text from `/report`, `/summary`, and scheduled reports
 retains its original Chinese plain-text format (date, 應到人數, 實到人數, and
 category lists). It bypasses card conversion and AI translation. Other portal
 and ticket replies still use cards.
+
+## Admin Time Out Report (下班回校報告)
+
+Only the admin menu's Work Schedule tile becomes **Time Out Report**. Students
+retain Work Schedule. Admins can also use `/timeout [YYYY-MM-DD] [returned-count]`.
+
+The first scheduled report, `/report`, or `/summary` issued for an elapsed
+workday stores its exact text and roster in `Morning Reports`. That snapshot is
+kept when afternoon leave records change. If no snapshot exists, the admin card
+explicitly offers **Save Current Morning Report**; it does not claim to recover
+a historical report that was never captured. Future days and rest days are not
+captured for bus returns.
+
+Time Out Report shows the morning attendance totals, who is not taking the bus,
+and the expected return count. Existing no-bus notices are included, and admins
+can mark or clear additional no-bus choices in a paginated attendee list. These
+choices live in `Time Out Drafts` and never change attendance or salary. Morning
+absences and paid annual-leave students are not expected bus passengers.
+
+Choose **Preview Everyone Returned**, or enter the actual returned count if some
+students are still missing. Confirm only after checking the bus passengers. The
+plain-text report keeps the morning leave list, updates the 不坐公交車 section,
+and appends `回到學校：<count>`. For example, 23 attending with one no-bus attendee
+means 22 expected returns. The confirmation records the count, administrator,
+and timestamp in `Time Out Reports`; partial returns do not mark everyone home.
+
+Confirmations are signed, expire after ten minutes, and are invalidated if the
+bus selection or saved report changes. Reports remain private so the admin can
+copy the plain text into the group when ready.

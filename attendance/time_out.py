@@ -6,7 +6,7 @@ import re
 from zoneinfo import ZoneInfo
 
 from attendance.attendance import AttendanceRecord
-from attendance.report import ABSENT_STATUSES, DailyReportText, StudentDisplay, build_report
+from attendance.report import ABSENT_STATUSES, DailyReportText, build_report
 from database import google_sheets as db
 
 MORNING_HEADERS = ["Date", "Captured At", "Report", "Snapshot"]
@@ -33,6 +33,9 @@ def get_morning(day):
 
 def save_morning(day, report, records, students, expected):
     """Freeze the first issued morning report; later leave changes cannot replace it."""
+    from scheduler.work_calendar import is_workday
+    if day > datetime.now(ZoneInfo("Asia/Taipei")).date() or not is_workday(day):
+        return None
     existing = get_morning(day)
     if existing:
         return existing

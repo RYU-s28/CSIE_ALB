@@ -74,7 +74,7 @@ def localize_message(message, user_id=None):
                 button_action = node.get("action", {})
                 if isinstance(button_action, dict):
                     action_data = parse_qs(button_action.get("data", ""))
-                    if action_data.get("action") == ["admin_student"] and action_data.get("student"):
+                    if action_data.get("action") in (["admin_student"], ["admin_timeout_set_bus"]) and action_data.get("student"):
                         # Roster-picker labels contain another student's name.
                         protected.add(str(button_action.get("label", "")))
                 children = node.get("contents", [])

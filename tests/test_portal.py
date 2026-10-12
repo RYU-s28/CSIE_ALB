@@ -1283,3 +1283,185 @@ class TestDailyReportPlainText(TestCase):
                 translate.assert_not_called()
         finally:
             destination.reset(token)
+
+
+class TestTimeOutReport(TestCase):
+    def setUp(self):
+        from attendance.attendance import AttendanceRecord
+        from attendance.report import StudentDisplay, build_report
+        self.env = patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin", "LINE_CHANNEL_SECRET": "secret"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.day = date(2026, 10, 11)
+        self.students = {f"ST{index:03}": StudentDisplay(f"ST{index:03}", f"Student {index}") for index in range(41)}
+        self.students["ST018"].display_name = "貝瑞森 (Rio)"
+        statuses = ["personal_leave"] * 6 + ["sick_leave"] * 4 + ["menstrual_leave"] * 3 + ["not_coming"] * 5
+        self.records = [AttendanceRecord(student_id=f"ST{index:03}", status=status, attendance_date=self.day) for index, status in enumerate(statuses)]
+        self.morning = build_report(report_date=self.day, total_students=41, expected_students=41, records=self.records, students=self.students)
+        self.tables = {}
+        def worksheet(name, headers):
+            if name not in self.tables:
+                rows = [headers[:]]
+                sheet = MagicMock()
+                sheet.get_all_values.side_effect = lambda: [row[:] for row in rows]
+                sheet.append_row.side_effect = lambda values, **kwargs: rows.append(list(values))
+                def update(*, range_name, values, **kwargs):
+                    import re
+                    index = int(re.search(r"\d+", range_name)[0]) - 1
+                    rows[index] = list(values[0])
+                sheet.update.side_effect = update
+                self.tables[name] = (sheet, rows)
+            return self.tables[name][0]
+        self.sheet_patch = patch("database.google_sheets._ensure_named_sheet", side_effect=worksheet)
+        self.sheet_patch.start()
+        self.addCleanup(self.sheet_patch.stop)
+        self.attendance = patch("database.google_sheets.get_attendance_rows", return_value=[])
+        self.mock_attendance = self.attendance.start()
+        self.addCleanup(self.attendance.stop)
+        from attendance.time_out import save_morning
+        save_morning(self.day, self.morning, self.records, self.students, 41)
+
+    def test_example_23_attended_one_no_bus_gives_22_returned(self):
+        from attendance.time_out import get_state, confirm_return
+        from attendance.report import DailyReportText
+        self.mock_attendance.return_value = [{"student_id": "ST018", "type": "不坐公交車"}]
+        state = get_state(self.day)
+        self.assertEqual(state["expected_return"], 22)
+        report = confirm_return(self.day, 22, "Uadmin", state["fingerprint"])
+        self.assertIsInstance(report, DailyReportText)
+        self.assertIn("應到人數：41", report)
+        self.assertIn("實到人數：23", report)
+        for category, count in (("事假", 6), ("病假", 4), ("經痛", 3), ("不出來", 5)):
+            self.assertIn(f"{category}：{count}人", report)
+        self.assertIn("不坐公交車：1人\n@貝瑞森 (Rio)", report)
+        self.assertTrue(report.endswith("回到學校：22"))
+        self.assertTrue(self.tables["Time Out Reports"][1][1][6])
+
+    def test_morning_snapshot_never_changes_with_afternoon_records(self):
+        from attendance.time_out import save_morning, get_state
+        saved = save_morning(self.day, "Changed afternoon report", [], self.students, 41)
+        self.assertEqual(saved["report"], self.morning)
+        self.assertEqual(len(self.tables["Morning Reports"][1]), 2)
+        self.assertEqual(get_state(self.day)["morning"]["snapshot"]["attended"], 23)
+
+    def test_bus_override_does_not_change_leave_or_salary(self):
+        from attendance.time_out import set_bus_exception, get_state
+        with patch("database.google_sheets.upsert_attendance_record") as log, patch("database.google_sheets.update_monthly_report_cell") as grid:
+            set_bus_exception(self.day, "ST018", True)
+            self.assertEqual(get_state(self.day)["expected_return"], 22)
+            set_bus_exception(self.day, "ST018", False)
+            self.assertEqual(get_state(self.day)["expected_return"], 23)
+            log.assert_not_called()
+            grid.assert_not_called()
+        with self.assertRaises(ValueError):
+            set_bus_exception(self.day, "ST000", True)
+
+    def test_absent_student_not_subtracted_twice(self):
+        from attendance.time_out import get_state
+        self.mock_attendance.return_value = [{"student_id": "ST000", "type": "不坐公交車"}]
+        self.assertEqual(get_state(self.day)["expected_return"], 23)
+
+    def test_changed_bus_list_and_repeat_confirmation_rejected(self):
+        from attendance.time_out import get_state, set_bus_exception, confirm_return
+        before = get_state(self.day)
+        set_bus_exception(self.day, "ST018", True)
+        with self.assertRaisesRegex(ValueError, "changed"):
+            confirm_return(self.day, 23, "Uadmin", before["fingerprint"])
+        now = get_state(self.day)
+        confirm_return(self.day, 22, "Uadmin", now["fingerprint"])
+        with self.assertRaises(ValueError):
+            confirm_return(self.day, 22, "Uadmin", now["fingerprint"])
+
+    def test_partial_return_does_not_mark_everyone_home(self):
+        from attendance.time_out import get_state, confirm_return
+        state = get_state(self.day)
+        report = confirm_return(self.day, 20, "Uadmin", state["fingerprint"])
+        self.assertTrue(report.endswith("回到學校：20"))
+        self.assertFalse(self.tables["Time Out Reports"][1][1][6])
+        from bot.time_out_portal import timeout_message
+        rows = timeout_message(self.day).contents.data["body"]["contents"]
+        values = {row["contents"][0]["text"]: row["contents"][1]["text"] for row in rows if row.get("layout") == "horizontal"}
+        self.assertEqual(values["Status"], "Awaiting Return Confirmation")
+
+    def test_nonadmin_and_invalid_counts_cannot_confirm(self):
+        from attendance.time_out import get_state, confirm_return
+        state = get_state(self.day)
+        with self.assertRaises(ValueError):
+            confirm_return(self.day, 23, "Ustudent", state["fingerprint"])
+        for count in (-1, 24):
+            with self.assertRaises(ValueError):
+                confirm_return(self.day, count, "Uadmin", state["fingerprint"])
+
+    def test_confirmation_flow_outputs_plain_text(self):
+        from bot.admin_portal import handle_postback
+        from urllib.parse import parse_qs
+        from attendance.report import DailyReportText
+        preview = handle_postback({"action": ["admin_timeout_preview"], "date": [self.day.isoformat()]}, "Uadmin")
+        self.assertEqual(len(self.tables["Time Out Reports"][1]), 1)
+        data = parse_qs(preview.contents.data["footer"]["contents"][0]["action"]["data"])
+        result = handle_postback(data, "Uadmin")
+        self.assertIsInstance(result, DailyReportText)
+        self.assertTrue(result.endswith("回到學校：23"))
+
+    def test_missing_morning_report_requests_capture(self):
+        from bot.time_out_portal import timeout_message
+        import json
+        result = timeout_message(date(2026, 10, 10))
+        content = json.dumps(result.contents.data)
+        self.assertIn("No saved morning report", content)
+        self.assertIn("cannot recover an earlier report", content)
+
+    def test_existing_transport_section_is_replaced_not_duplicated(self):
+        from attendance.time_out import get_state, compose_report
+        state = get_state(self.day)
+        state["morning"]["report"] = str(self.morning) + "\n\n不坐公交車：1人\n@Old Name"
+        state["no_bus"] = ["ST018"]
+        state["expected_return"] = 22
+        report = compose_report(state, 22)
+        self.assertEqual(report.count("不坐公交車："), 1)
+        self.assertNotIn("Old Name", report)
+        self.assertIn("貝瑞森 (Rio)", report)
+
+    def test_admin_menu_changes_only_admin_schedule_tile(self):
+        admin = build_rich_menu_request(admin=True)
+        student = build_rich_menu_request()
+        self.assertEqual(admin.areas[3].action.label, "Time Out Report")
+        self.assertEqual(admin.areas[3].action.data, "action=admin_timeout")
+        self.assertEqual(student.areas[3].action.label, "Work Schedule")
+        self.assertEqual(student.areas[3].action.data, "action=richmenu_schedule")
+
+
+class TestTimeOutEligibility(TestCase):
+    def test_paid_annual_leave_preserves_attendance_but_not_bus_expectation(self):
+        from attendance.time_out import save_morning
+        from attendance.attendance import AttendanceRecord
+        from attendance.report import StudentDisplay, build_report
+        day = date(2026, 10, 11)
+        students = {sid: StudentDisplay(sid, sid) for sid in ("A", "B", "C")}
+        records = [AttendanceRecord(student_id="A", status="special_leave", attendance_date=day)]
+        report = build_report(report_date=day, total_students=3, expected_students=3, records=records, students=students)
+        sheet = MagicMock()
+        sheet.get_all_values.return_value = [["Date", "Captured At", "Report", "Snapshot"]]
+        with patch("database.google_sheets._ensure_named_sheet", return_value=sheet):
+            saved = save_morning(day, report, records, students, 3)
+        self.assertEqual(saved["snapshot"]["attended"], 3)
+        self.assertFalse(saved["snapshot"]["students"]["A"]["return_expected"])
+        self.assertTrue(saved["snapshot"]["students"]["B"]["return_expected"])
+
+    def test_future_or_rest_day_report_does_not_freeze_morning_attendance(self):
+        from attendance.time_out import save_morning
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+        with patch("database.google_sheets._ensure_named_sheet") as sheet:
+            self.assertIsNone(save_morning(date(2026, 10, 12), "Rest day", [], {}, 0))
+            future = datetime.now(ZoneInfo("Asia/Taipei")).date() + timedelta(days=365)
+            self.assertIsNone(save_morning(future, "Future day", [], {}, 0))
+            sheet.assert_not_called()
+
+    def test_student_cannot_access_time_out_workspace(self):
+        from bot.admin_portal import handle_postback
+        with patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin"}), patch("attendance.time_out.get_state") as read:
+            with self.assertRaisesRegex(ValueError, "administrators only"):
+                handle_postback({"action": ["admin_timeout"]}, "Ustudent")
+            read.assert_not_called()

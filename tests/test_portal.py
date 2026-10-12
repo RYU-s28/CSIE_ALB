@@ -1382,7 +1382,8 @@ class TestTimeOutReport(TestCase):
         from bot.time_out_portal import timeout_message
         rows = timeout_message(self.day).contents.data["body"]["contents"]
         values = {row["contents"][0]["text"]: row["contents"][1]["text"] for row in rows if row.get("layout") == "horizontal"}
-        self.assertEqual(values["Status"], "Awaiting Return Confirmation")
+        self.assertEqual(values["Confirmed Returned"], "20")
+        self.assertNotIn("Status", values)
 
     def test_nonadmin_and_invalid_counts_cannot_confirm(self):
         from attendance.time_out import get_state, confirm_return
@@ -1393,16 +1394,30 @@ class TestTimeOutReport(TestCase):
             with self.assertRaises(ValueError):
                 confirm_return(self.day, count, "Uadmin", state["fingerprint"])
 
-    def test_confirmation_flow_outputs_plain_text(self):
+    def test_direct_send_outputs_group_plain_text_without_preview(self):
         from bot.admin_portal import handle_postback
-        from urllib.parse import parse_qs
-        from attendance.report import DailyReportText
-        preview = handle_postback({"action": ["admin_timeout_preview"], "date": [self.day.isoformat()]}, "Uadmin")
-        self.assertEqual(len(self.tables["Time Out Reports"][1]), 1)
-        data = parse_qs(preview.contents.data["footer"]["contents"][0]["action"]["data"])
-        result = handle_postback(data, "Uadmin")
-        self.assertIsInstance(result, DailyReportText)
+        from attendance.report import GroupReportText
+        self.assertNotIn("Time Out Reports", self.tables)
+        result = handle_postback({"action": ["admin_timeout_send"], "date": [self.day.isoformat()]}, "Uadmin")
+        self.assertIsInstance(result, GroupReportText)
         self.assertTrue(result.endswith("回到學校：23"))
+        self.assertEqual(len(self.tables["Time Out Reports"][1]), 2)
+
+    def test_timeout_card_has_only_two_actions_and_no_extra_explanation(self):
+        from bot.time_out_portal import timeout_message
+        result = timeout_message(self.day)
+        buttons = result.contents.data["footer"]["contents"]
+        self.assertEqual([button["action"]["label"] for button in buttons], ["Choose Who Won't Take Bus", "Send to Group"])
+        rows = result.contents.data["body"]["contents"]
+        labels = [row["contents"][0]["text"] for row in rows if row.get("layout") == "horizontal"]
+        self.assertNotIn("Status", labels)
+        self.assertEqual(buttons[1]["margin"], "8px")
+
+    def test_old_preview_button_now_sends_directly(self):
+        from bot.admin_portal import handle_postback
+        from attendance.report import GroupReportText
+        result = handle_postback({"action": ["admin_timeout_preview"], "date": [self.day.isoformat()]}, "Uadmin")
+        self.assertIsInstance(result, GroupReportText)
 
     def test_missing_morning_report_requests_capture(self):
         from bot.time_out_portal import timeout_message
@@ -1410,7 +1425,7 @@ class TestTimeOutReport(TestCase):
         result = timeout_message(date(2026, 10, 10))
         content = json.dumps(result.contents.data)
         self.assertIn("No saved morning report", content)
-        self.assertIn("cannot recover an earlier report", content)
+        self.assertIn("cannot be recovered", content)
 
     def test_existing_transport_section_is_replaced_not_duplicated(self):
         from attendance.time_out import get_state, compose_report

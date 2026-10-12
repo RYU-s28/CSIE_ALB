@@ -268,17 +268,16 @@ can mark or clear additional no-bus choices in a paginated attendee list. These
 choices live in `Time Out Drafts` and never change attendance or salary. Morning
 absences and paid annual-leave students are not expected bus passengers.
 
-Choose **Preview Everyone Returned**, or enter the actual returned count if some
-students are still missing. Confirm only after checking the bus passengers. The
-plain-text report keeps the morning leave list, updates the 不坐公交車 section,
-and appends `回到學校：<count>`. For example, 23 attending with one no-bus attendee
-means 22 expected returns. The confirmation records the count, administrator,
-and timestamp in `Time Out Reports`; partial returns do not mark everyone home.
-
-Confirmations are signed, expire after ten minutes, and are invalidated if the
-bus selection or saved report changes. Confirmed reports post as plain text to
-`LINE_REPORT_GROUP_ID`; the admin receives a private delivery acknowledgment.
-Preview cards and viewing a saved morning report remain private.
+The compact Time Out card shows counts and only two actions: **Choose Who Won't
+Take Bus** and **Send to Group**. Send to Group records the current expected
+return count and posts the plain-text report directly to `LINE_REPORT_GROUP_ID`,
+without a preview or confirmation card. The report retains the morning leave
+list, updates 不坐公交車, and appends `回到學校：<count>`. For example, 23 attending
+with one no-bus attendee gives 22 returns. Counts are read at send time; a
+concurrent change during processing is rejected. The admin receives a private
+delivery acknowledgment. `/timeout YYYY-MM-DD <actual-count>` remains available
+for directly sending a partial return report. Partial returns do not mark
+everyone home. Administrator identity is checked on every send.
 
 ## Refreshing edited rich menu artwork
 

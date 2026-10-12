@@ -2,45 +2,28 @@
 from attendance.report import DailyReportText, GroupReportText
 from attendance import time_out
 from bot.search_context import begin_search
-from bot.admin_portal import action, card, date_button, paragraph, signed_action, verify_action, today, search_button, search_query
-from bot.line_ui import DEDUCTION_RED, _button, _stat_row
+from bot.admin_portal import action, card, paragraph, verify_action, today, search_button, search_query
+from bot.line_ui import _button, _stat_row
 
 
 def timeout_message(day):
     state = time_out.get_state(day)
     if state is None:
-        return card("Time Out Report", [
-            paragraph("No saved morning report exists for this date. The scheduled morning report and /report save one automatically."),
-            paragraph("Save Current Morning Report captures the current attendance records; it cannot recover an earlier report that was never saved."),
-        ], [
+        return card("Time Out Report", [paragraph("No saved morning report exists for this date. Save the current report first; an earlier report that was never saved cannot be recovered.")], [
             _button("Save Current Morning Report", action("admin_timeout_capture", date=day), margin="none"),
-            date_button("admin_timeout", day),
-            _button("Admin Portal", "action=admin_portal", margin="none"),
         ], subtitle=day.isoformat())
     snapshot = state["morning"]["snapshot"]
     final = state["final"]
     returned = int(final[1]) if final else None
-    complete = returned == state["expected_return"] if returned is not None else False
-    current_report = False
-    if final and returned is not None and 0 <= returned <= state["expected_return"]:
-        current_report = final[3] == str(time_out.compose_report(state, returned))
-    contents = [
+    return card("Time Out Report", [
         _stat_row("Morning Expected", str(snapshot["expected"]), margin="md"),
         _stat_row("Morning Attended", str(snapshot["attended"]), margin="xs"),
         _stat_row("No Bus", str(len(state["no_bus"])), margin="xs"),
         _stat_row("Expected School Return", str(state["expected_return"]), margin="xs"),
-        _stat_row("Confirmed Returned", str(returned) if returned is not None else "Not Confirmed", margin="xs"),
-        _stat_row("Status", "Everyone Returned" if complete and current_report else "Refresh Confirmation" if final and not current_report else "Awaiting Return Confirmation", margin="xs"),
-        paragraph("Check the no-bus list, then confirm how many actually returned. The morning attendance totals and leave list are preserved. Paid annual leave is not a bus passenger."),
-    ]
-    return card("Time Out Report", contents, [
-        _button("View Saved Morning Report", action("admin_timeout_morning", date=day), margin="none"),
+        _stat_row("Confirmed Returned", str(returned) if returned is not None else "Not Sent", margin="xs"),
+    ], [
         _button("Choose Who Won't Take Bus", action("admin_timeout_bus", date=day), margin="none"),
-        _button("Preview Everyone Returned", action("admin_timeout_preview", date=day), margin="none"),
-        {"type": "button", "style": "secondary", "action": {"type": "postback", "label": "Enter Actual Return Count", "data": action("admin_timeout_count", date=day), "inputOption": "openKeyboard", "fillInText": f"/timeout {day.isoformat()} "}},
-        date_button("admin_timeout", day),
-        _button("Refresh Return Status", action("admin_timeout", date=day), margin="none"),
-        _button("Admin Portal", "action=admin_portal", margin="none"),
+        _button("Send to Group", action("admin_timeout_send", date=day), margin="none"),
     ], subtitle=day.isoformat())
 
 
@@ -71,25 +54,12 @@ def bus_message(day, page=0, query=None):
     return card("No-Bus Search", contents, buttons, subtitle=day.isoformat())
 
 
-def preview_message(day, actor, returned=None):
+def send_message(day, actor, returned=None):
     state = time_out.get_state(day)
     if state is None:
         return timeout_message(day)
     returned = state["expected_return"] if returned is None else returned
-    time_out.compose_report(state, returned)  # Validate the number before issuing confirmation.
-    complete = returned == state["expected_return"]
-    confirm = signed_action(actor, "admin_timeout_confirm", date=day, returned=returned, snapshot=state["fingerprint"])
-    return card("Confirm Time Out Report", [
-        _stat_row("Morning Attended", str(state["morning"]["snapshot"]["attended"]), margin="md"),
-        _stat_row("No Bus", str(len(state["no_bus"])), margin="xs"),
-        _stat_row("Expected Return", str(state["expected_return"]), margin="xs"),
-        _stat_row("回到學校", str(returned), margin="xs"),
-        paragraph("Confirm only after checking that everyone listed for the bus has returned to school." if complete else f"{state['expected_return'] - returned} expected passenger(s) have not yet been confirmed returned. This report will remain incomplete."),
-        paragraph("The confirmed report will be posted as plain text to the configured group chat, with the morning leave list and 回到學校 appended."),
-    ], [
-        _button("Confirm Everyone Returned" if complete else "Confirm Partial Return", confirm, color=DEDUCTION_RED, margin="none"),
-        _button("Cancel", action("admin_timeout", date=day), margin="none"),
-    ], subtitle=day.isoformat())
+    return GroupReportText(time_out.confirm_return(day, returned, actor, state["fingerprint"]))
 
 
 def handle_time_out(data, actor, day):
@@ -120,9 +90,9 @@ def handle_time_out(data, actor, day):
         return card("Search Attendees", [paragraph("Type a student name or ID in the typing area and send. Only morning attendees are included.")], [_button("Cancel Search", action("admin_timeout_bus", date=day), margin="none")], subtitle=day.isoformat())
     if name == "admin_timeout_count":
         return card("Enter Return Count", [paragraph(f"Send /timeout {day.isoformat()} followed by the number who actually returned. For example: /timeout {day.isoformat()} 22")])
-    if name == "admin_timeout_preview":
+    if name in {"admin_timeout_send", "admin_timeout_preview"}:
         raw = get("returned")
-        return preview_message(day, actor, int(raw) if raw else None)
+        return send_message(day, actor, int(raw) if raw else None)
     if name == "admin_timeout_confirm":
         verify_action(actor, data)
         return GroupReportText(time_out.confirm_return(day, int(get("returned")), actor, get("snapshot")))

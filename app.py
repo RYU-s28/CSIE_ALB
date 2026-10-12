@@ -549,7 +549,7 @@ def handle_message(event):
                 selected_day = date.fromisoformat(tokens[1]) if len(tokens) > 1 else _today_taipei()
                 action_data = {"action": ["admin_timeout"], "date": [selected_day.isoformat()]}
                 if len(tokens) > 2:
-                    action_data["action"] = ["admin_timeout_preview"]
+                    action_data["action"] = ["admin_timeout_send"]
                     action_data["returned"] = [tokens[2]]
                 reply_to_line(event.reply_token, admin_portal.handle_postback(action_data, user_id))
             except (ValueError, RuntimeError) as error:

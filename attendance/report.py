@@ -27,7 +27,7 @@ STATUS_LABELS = {
     "not_coming": "不出來",
     "cancelled_work": "取消工讀",
     "late": "遲到",
-    "unknown": "待確認",
+    "unknown": "不出來",
 }
 
 ABSENT_STATUSES = {
@@ -107,6 +107,9 @@ def build_report(
         "unknown",
     )
 
+    # Pending absence notices share the public absence section; their saved
+    # status remains pending for administrator review.
+    grouped.setdefault("not_coming", []).extend(grouped.pop("unknown", []))
     for status in section_order:
         status_records = grouped.get(status, [])
         if not status_records:

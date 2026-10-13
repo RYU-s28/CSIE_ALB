@@ -45,6 +45,8 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
     ),
     "personal_leave": (
         "事假",
+        "考試",
+        "exam",
         "已請假",
         "已經請假",
         "提前請假",

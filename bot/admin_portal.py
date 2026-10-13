@@ -19,8 +19,9 @@ STATUSES = {
     "sick": ("Sick Leave", "病假"), "personal": ("Personal Leave", "事假"),
     "menstrual": ("Menstrual Leave", "經痛"), "annual": ("Annual Leave · Paid", "特休"),
     "half": ("Half Day", "半天"), "late": ("Late", "遲到"),
-    "absent": ("Absent", "不出來"), "pending": ("Pending Review", "待確認"),
+    "exam": ("考試 · Personal Leave", "事假"), "pending": ("Pending Review", "待確認"),
     "clear": ("Clear · Blank Record", ""),
+    "absent": ("Absent", "不出來"),
 }
 
 
@@ -192,9 +193,11 @@ def student_message(student, day, ticket_id=None):
     if day not in entries:
         return card("Choose a Workday", [_stat_row("Student Name", name, margin="md"), paragraph("This date is not scheduled. Choose the attendance date to continue.")], [date_button("admin_student", day, student=student["student_id"], ticket=ticket_id), _button("Back", cancel, margin="none")], subtitle=day.isoformat())
     current = entries[day] or ("Present" if day < today() else "Pending")
-    short_labels = {"present": "Present", "sick": "Sick Leave", "personal": "Personal", "menstrual": "Menstrual", "annual": "Annual · Paid", "half": "Half Day", "late": "Late", "absent": "Absent", "pending": "Pending", "clear": "Clear"}
+    short_labels = {"present": "Present", "sick": "Sick Leave", "personal": "Personal", "menstrual": "Menstrual", "annual": "Annual · Paid", "half": "Half Day", "late": "Late", "exam": "考試", "pending": "Pending", "clear": "Clear"}
     choices = []
     for key in STATUSES:
+        if key == "absent":
+            continue
         button = _button(short_labels[key], action("admin_change", student=student["student_id"], date=day, status=key, ticket=ticket_id), margin="none")
         if key == "clear":
             button["color"] = DEDUCTION_RED
@@ -239,7 +242,7 @@ def edit_shortcut(message, actor):
     aliases = {key: key for key in STATUSES}
     aliases.update({"sick leave": "sick", "personal leave": "personal",
                     "menstrual leave": "menstrual", "annual leave": "annual",
-                    "half day": "half", "pending review": "pending"})
+                    "half day": "half", "pending review": "pending", "考試": "exam", "absent": "absent"})
     for label in sorted(aliases, key=len, reverse=True):
         status_match = re.search(r"\s+" + re.escape(label) + r"$", query, re.IGNORECASE)
         if status_match:

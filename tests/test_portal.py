@@ -1646,7 +1646,7 @@ class TestSearchFirstAdminCards(TestCase):
         rows = [row for row in result.contents.data["body"]["contents"] if row.get("layout") == "horizontal" and any(child.get("type") == "button" for child in row.get("contents", []))]
         self.assertEqual(len(rows), 5)
         buttons = [button for row in rows for button in row["contents"] if button.get("type") == "button"]
-        self.assertEqual({parse_qs(button["action"]["data"])["status"][0] for button in buttons}, set(STATUSES))
+        self.assertEqual({parse_qs(button["action"]["data"])["status"][0] for button in buttons}, set(STATUSES) - {"absent"})
         self.assertEqual(len(result.contents.data["footer"]["contents"]), 2)
 
     def test_missing_scheduled_date_opens_picker_instead_of_error(self):
@@ -1725,7 +1725,7 @@ class TestDirectEditAndClear(TestCase):
         commands += [("Edit S06677 " + label, key) for label, key in (
             ("present", "present"), ("sick leave", "sick"), ("personal", "personal"),
             ("menstrual", "menstrual"), ("annual", "annual"), ("half day", "half"),
-            ("late", "late"), ("pending", "pending"))]
+            ("late", "late"), ("pending", "pending"), ("考試", "exam"), ("Exam", "exam"))]
         for command, key in commands:
             with self.subTest(command=command), \
                  patch("database.google_sheets.find_student_by_id", return_value=self.student), \
@@ -1748,13 +1748,13 @@ class TestDirectEditAndClear(TestCase):
                 edit_shortcut("Edit S06677", "Ustudent")
             read.assert_not_called()
 
-    def test_clear_is_red_and_directly_below_absent(self):
+    def test_clear_is_red_and_directly_below_exam(self):
         from bot.admin_portal import student_message
         from bot.line_ui import DEDUCTION_RED
         with patch("database.google_sheets.get_monthly_report_entries", return_value={self.day: "病假"}):
             result = student_message(self.student, self.day)
         grid = [row for row in result.contents.data["body"]["contents"] if row.get("layout") == "horizontal" and row["contents"][0].get("type") == "button"]
-        self.assertEqual(grid[3]["contents"][1]["action"]["label"], "Absent")
+        self.assertEqual(grid[3]["contents"][1]["action"]["label"], "考試")
         clear = grid[4]["contents"][1]
         self.assertEqual(clear["action"]["label"], "Clear")
         self.assertEqual(clear["color"], DEDUCTION_RED)
@@ -1930,3 +1930,21 @@ class ImmediateAdminStatusTests(TestCase):
                         self.assertIn("Attendance Updated", result.alt_text)
                         self.assertEqual(write.call_args.args[3], "病假")
                         grid.assert_called_once_with("S06677", day, "病假")
+
+
+class ExamAndPendingReportTests(TestCase):
+    def test_exam_admin_choice_is_personal_leave(self):
+        from bot.admin_portal import STATUSES
+        self.assertEqual(STATUSES["exam"][1], "事假")
+
+    def test_pending_and_absent_share_one_report_section(self):
+        from attendance.attendance import AttendanceRecord
+        from attendance.report import build_report
+        day = date(2026, 10, 14)
+        records = [AttendanceRecord(student_id="S1", status="unknown", message="", attendance_date=day, attendance_intent=True),
+                   AttendanceRecord(student_id="S2", status="not_coming", message="", attendance_date=day)]
+        report = build_report(report_date=day, total_students=3, expected_students=3, records=records)
+        self.assertIn("不出來：2人", report)
+        self.assertEqual(report.count("不出來："), 1)
+        self.assertNotIn("待確認", report)
+        self.assertIn("實到人數：1", report)

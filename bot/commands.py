@@ -46,6 +46,8 @@ STATUS_ALIASES = {
     "sickleave": "病假",
     "事假": "事假",
     "personal": "事假",
+    "考試": "事假",
+    "exam": "事假",
     "leave": "事假",
     "personalleave": "事假",
     "特休": "特休",

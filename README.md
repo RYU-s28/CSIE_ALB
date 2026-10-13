@@ -161,6 +161,29 @@ Uvicorn deployment; multiple workers/replicas would require shared ordering and
 write coordination.
 
 
+## Group translator
+
+Set `GOOGLE_CLOUD_TRANSLATE` to a Google Cloud Translation API key with the
+Cloud Translation API enabled. Incoming human text in any group containing the
+bot is translated English → Traditional Chinese (`zh-TW`) or Chinese → English
+using [Cloud Translation Basic](https://docs.cloud.google.com/translate/docs/reference/rest/v2/translate).
+Translations are plain text in the originating group, quoting the original
+message when LINE supplies a quote token. No student registration is required
+for translation. Private chats, slash commands, `Edit` commands, numbers-only
+messages, and unsupported detected languages are skipped. Messages sent by the
+bot, including reports and translations, are not fed through translation.
+
+Mentions, links, and student IDs are excluded from the translation request and
+restored verbatim. Group translation is the explicit public-response exception
+alongside official reports; attendance cards and account/ticket responses remain
+private. Existing per-user spam limits and webhook duplicate suppression run
+before translation. A bounded four-worker background pool keeps translation off
+the attendance-processing path, with API timeouts and a five-minute bounded cache.
+Translation failures are logged without message text or API keys; leave handling
+continues. Removing the key disables group translation. This is separate from
+the fixed bilingual private UI, which remains API-free. Google API usage follows
+[Google Cloud Translation pricing](https://cloud.google.com/products/translate/pricing).
+
 ## Language settings and first greeting
 
 The bot's initial account card is English and its title is `CSIE Student`.

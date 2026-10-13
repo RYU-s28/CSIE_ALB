@@ -2266,6 +2266,21 @@ class ThreadedWebhookTests(IsolatedAsyncioTestCase):
             self.assertEqual(await self.callback_function()(SimpleNamespace(body=body), signature), {"status": "ok"})
         self.assertCountEqual(calls, ["U1", "U2"])
 
+    async def test_callback_does_not_dispatch_the_bots_own_messages(self):
+        import app as application
+        import json
+        import base64
+        import hmac
+        import hashlib
+        from types import SimpleNamespace
+        raw = json.dumps({"destination": "Ubot", "events": [{"type": "message", "source": {"type": "group", "groupId": "Cgroup", "userId": "Ubot"}}]}).encode()
+        async def body():
+            return raw
+        signature = base64.b64encode(hmac.new(application.CHANNEL_SECRET.encode(), raw, hashlib.sha256).digest()).decode()
+        with patch.object(application.webhook_dispatcher, "submit") as submit:
+            self.assertEqual(await self.callback_function()(SimpleNamespace(body=body), signature), {"status": "ok"})
+        submit.assert_not_called()
+
     async def test_invalid_signature_is_rejected_before_any_event_is_queued(self):
         import app as application
         from types import SimpleNamespace
@@ -2357,3 +2372,159 @@ class SingleAttendanceSnapshotTests(TestCase):
             self.assertNotEqual(first.result(2), second.result(2))
         self.assertEqual([row[0] for row in rows[1:]], ["S1", "S2", "S3"])
         self.assertEqual(read_count[0], 2)
+
+
+class GroupTranslationTests(TestCase):
+    def setUp(self):
+        from bot import group_translation as translation
+        self.translation = translation
+        translation._cache.invalidate()
+        env = patch.dict(os.environ, {"GOOGLE_CLOUD_TRANSLATE": "test-translation-key", "LINE_BOT_USER_ID": "Ubot"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def event(self, text="Hello everyone", source="group", uid="U1"):
+        from types import SimpleNamespace
+        return SimpleNamespace(source=SimpleNamespace(type=source, group_id="Cgroup" if source == "group" else None, user_id=uid),
+                               reply_token="token", message=SimpleNamespace(text=text, quote_token="quote", mention=None))
+
+    def test_english_to_traditional_chinese_and_chinese_to_english(self):
+        for text, target, source, expected in (("Hello everyone", "zh-TW", "en", "大家好"), ("大家好", "en", "zh-TW", "Hello everyone")):
+            with self.subTest(text=text), patch.object(self.translation, "_google_translate", return_value=[{"translatedText": expected, "detectedSourceLanguage": source}]) as google:
+                self.assertEqual(self.translation.translate_group_text(text), expected)
+                self.assertEqual(google.call_args.args[1], target)
+                self.assertEqual(google.call_args.args[2], "test-translation-key")
+
+    def test_other_languages_and_nontext_are_not_posted(self):
+        with patch.object(self.translation, "_google_translate", return_value=[{"translatedText": "謝謝", "detectedSourceLanguage": "tl"}]):
+            self.assertIsNone(self.translation.translate_group_text("salamat po"))
+        with patch.object(self.translation, "_google_translate") as google:
+            for text in ("12345", "😀", "https://example.com", "S06677", "@Name"):
+                self.assertIsNone(self.translation.translate_group_text(text))
+            google.assert_not_called()
+
+    def test_private_chats_bot_messages_and_commands_are_skipped(self):
+        for event in (self.event(source="user"), self.event(uid="Ubot"), self.event("/report"), self.event("Edit S06677 Clear")):
+            self.assertIsNone(self.translation.translation_job(event))
+        self.assertIsNotNone(self.translation.translation_job(self.event(uid="Uadmin")))
+
+    def test_mentions_links_and_ids_are_not_sent_to_google(self):
+        from types import SimpleNamespace
+        text = "Hi @杜榮瑪 S06677 https://example.com"
+        event = self.event(text)
+        event.message.mention = SimpleNamespace(mentionees=[SimpleNamespace(index=3, length=4)])
+        job = self.translation.translation_job(event)
+        with patch.object(self.translation, "_google_translate", return_value=[{"translatedText": "你好", "detectedSourceLanguage": "en"}]) as google:
+            result = self.translation.translate_group_text(job.text, job.mentions)
+        self.assertEqual(result, "你好 @杜榮瑪 S06677 https://example.com")
+        self.assertEqual(google.call_args.args[0], ("Hi ",))
+
+    def test_utf16_mention_after_emoji_is_preserved(self):
+        text = "😀 Hi @杜榮瑪"
+        with patch.object(self.translation, "_google_translate", return_value=[{"translatedText": "😀 你好", "detectedSourceLanguage": "en"}]) as google:
+            result = self.translation.translate_group_text(text, ((6, 4),))
+        self.assertEqual(result, "😀 你好 @杜榮瑪")
+        self.assertNotIn("杜榮瑪", str(google.call_args.args[0]))
+
+    def test_translation_cache_avoids_repeated_api_requests(self):
+        with patch.object(self.translation, "_google_translate", return_value=[{"translatedText": "大家好", "detectedSourceLanguage": "en"}]) as google:
+            for _ in range(2):
+                self.assertEqual(self.translation.translate_group_text("Hello everyone"), "大家好")
+        google.assert_called_once()
+
+    def test_google_request_uses_plain_text_detection_and_timeout(self):
+        response, session = MagicMock(), MagicMock()
+        response.json.return_value = {"data": {"translations": [{"translatedText": "你好", "detectedSourceLanguage": "en"}]}}
+        session.post.return_value = response
+        with patch.object(self.translation, "_session", return_value=session):
+            self.translation._google_translate(("Hello",), "zh-TW", "key")
+        self.assertEqual(session.post.call_args.kwargs["json"], {"q": ["Hello"], "target": "zh-TW", "format": "text"})
+        self.assertEqual(session.post.call_args.kwargs["timeout"], (3, 8))
+        response.raise_for_status.assert_called_once()
+
+    def test_group_translation_reply_bypasses_private_cards_and_ui_translation(self):
+        import app as application
+        from types import SimpleNamespace
+        api = MagicMock()
+        with patch.object(application, "MessagingApi", return_value=api), \
+             patch.object(application, "TextMessage", side_effect=lambda **values: SimpleNamespace(**values)), \
+             patch.object(application, "ReplyMessageRequest", side_effect=lambda **values: SimpleNamespace(**values)), \
+             patch.object(application, "localize_message") as localize, \
+             patch.object(application, "response_card_message") as card:
+            self.assertTrue(application.send_group_translation("group-reply-token", ["大家好"], "quote"))
+        request = api.reply_message.call_args.kwargs["reply_message_request"]
+        self.assertEqual(request.reply_token, "group-reply-token")
+        self.assertEqual(request.messages[0].text, "大家好")
+        self.assertEqual(request.messages[0].quote_token, "quote")
+        localize.assert_not_called()
+        card.assert_not_called()
+
+    def test_background_submission_does_not_delay_attendance(self):
+        pool, pending = MagicMock(), MagicMock()
+        pending.acquire.return_value = True
+        @self.translation.group_translations
+        def attendance(event):
+            return "attendance processed"
+        with patch.object(self.translation, "_pool", pool), patch.object(self.translation, "_pending", pending):
+            self.assertEqual(attendance(self.event()), "attendance processed")
+        pool.submit.assert_called_once()
+        pending.acquire.assert_called_once_with(blocking=False)
+
+    def test_rate_limit_and_duplicates_apply_before_translation(self):
+        from bot.rate_limit import rate_limited
+        @rate_limited
+        @self.translation.group_translations
+        def attendance(event):
+            return "processed"
+        with patch("bot.rate_limit.limiter.check", side_effect=[(True, False), (False, False)]), \
+             patch.object(self.translation, "queue_group_translation") as queue:
+            self.assertEqual(attendance(self.event()), "processed")
+            self.assertIsNone(attendance(self.event()))
+        queue.assert_called_once()
+
+    def test_api_failure_does_not_send_group_error_or_interrupt_attendance(self):
+        job = self.translation.translation_job(self.event())
+        with patch.object(self.translation, "translate_group_text", side_effect=RuntimeError("secret-key must not appear")), \
+             patch.object(self.translation, "_pending"), patch("app.send_group_translation") as send, \
+             self.assertLogs(level="WARNING") as logs:
+            self.translation._run(job)
+        send.assert_not_called()
+        self.assertNotIn("secret-key", str(logs.output))
+
+    def test_chunks_obey_line_utf16_limit(self):
+        chunks = self.translation.text_chunks("😀" * 3000)
+        self.assertEqual(len(chunks), 2)
+        self.assertTrue(all(len(chunk.encode("utf-16-le")) // 2 <= 4900 for chunk in chunks))
+        self.assertEqual("".join(chunks), "😀" * 3000)
+
+
+class ConcurrentCacheTests(TestCase):
+    def test_unrelated_cache_keys_can_load_concurrently(self):
+        from database.read_cache import ReadCache
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        cache = ReadCache()
+        entered, release, other = threading.Event(), threading.Event(), threading.Event()
+        def slow():
+            entered.set()
+            release.wait(2)
+            return "slow"
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(cache.get, "first", slow, 30)
+            try:
+                self.assertTrue(entered.wait(2))
+                second = executor.submit(cache.get, "second", lambda: (other.set(), "fast")[1], 30)
+                self.assertTrue(other.wait(2))
+            finally:
+                release.set()
+            self.assertEqual(first.result(2), "slow")
+            self.assertEqual(second.result(2), "fast")
+
+    def test_invalidation_during_read_does_not_cache_stale_data(self):
+        from database.read_cache import ReadCache
+        cache = ReadCache()
+        def raced_read():
+            cache.invalidate("sheet")
+            return "old"
+        self.assertEqual(cache.get("sheet", raced_read, 30), "old")
+        self.assertEqual(cache.get("sheet", lambda: "new", 30), "new")

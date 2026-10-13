@@ -43,6 +43,7 @@ from attendance.leave_message import (
 from attendance.salary import calculate_salary
 from bot.language import localize_message, private_language_context
 from bot.event_dispatch import webhook_dispatcher
+from bot.group_translation import group_translations
 from bot.rate_limit import rate_limited
 from bot.delivery import destination, private_responses
 from bot import admin_portal
@@ -130,6 +131,8 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
         import asyncio
         from database.mirror_worker import close_mirror_worker
         await asyncio.to_thread(close_mirror_worker)
+        from bot.group_translation import close_translation_pool
+        await asyncio.to_thread(close_translation_pool)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -189,6 +192,8 @@ async def callback(
     jobs = []
     for event in events:
         source = event.get("source", {})
+        if source.get("userId") and source.get("userId") == payload.get("destination"):
+            continue  # Never process the bot's own output as a human event.
         key = source.get("userId") or source.get("groupId") or source.get("roomId") or "system"
         # Retain SDK parsing/routing, but dispatch each already-authenticated
         # event separately so one slow sender doesn't delay everyone in a batch.
@@ -265,6 +270,22 @@ def push_to_line(user_id: str, message: str | FlexMessage) -> bool:
         return True
     except Exception as error:
         print("LINE PUSH ERROR:", repr(error))
+        return False
+
+
+def send_group_translation(reply_token, chunks, quote_token=None):
+    """Explicit public translation exception; other responses remain private."""
+    try:
+        messages = [TextMessage(text=text, **({"quote_token": quote_token} if quote_token and index == 0 else {}))
+                    for index, text in enumerate(chunks)]
+        with ApiClient(configuration) as client:
+            MessagingApi(client).reply_message(
+                reply_message_request=ReplyMessageRequest(reply_token=reply_token, messages=messages),
+                _request_timeout=(3.0, 8.0),
+            )
+        return True
+    except Exception as error:
+        print("GROUP TRANSLATION DELIVERY ERROR:", type(error).__name__)
         return False
 
 
@@ -508,6 +529,7 @@ def handle_follow(event):
 @private_responses
 @rate_limited
 @private_language_context
+@group_translations
 def handle_message(event):
     text = event.message.text or ""
 

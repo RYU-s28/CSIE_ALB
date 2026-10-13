@@ -147,6 +147,20 @@ writing. Manual spreadsheet changes appear after the applicable TTL; bot changes
 are reflected immediately. Attendance log writes and audit records remain
 synchronous; only the non-authoritative Attendance copy runs in the background.
 
+Webhook signatures are verified before dispatch. Each authenticated event is
+processed in a thread pool with up to eight concurrent senders; events from the
+same LINE UID are queued in arrival order across private/group chats and
+postbacks. Queue waits do not occupy worker threads. HTTP cancellation does not
+cancel a running edit or allow the next edit to overtake it. The webhook response
+still waits for processing to finish, preserving normal LINE reply behavior.
+Attendance mutations share a reentrant lock so concurrent users cannot choose
+and overwrite the same next row. Upserts, withdrawals, and clears reuse their
+attendance-table snapshot for record lookup and writing rather than rereading it.
+These queues and locks are process-local. Keep the existing single-process
+Uvicorn deployment; multiple workers/replicas would require shared ordering and
+write coordination.
+
+
 ## Language settings and first greeting
 
 The bot's initial account card is English and its title is `CSIE Student`.

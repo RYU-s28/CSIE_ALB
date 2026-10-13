@@ -2150,3 +2150,210 @@ class MonthlyReportReadCacheTests(TestCase):
             self.assertTrue(db.update_monthly_report_cell("S1", day, "出席"))
             self.assertEqual(db.get_monthly_report_entries("S1", day)[day], "出席")
         sheet_reads.invalidate(sheet)
+
+
+from unittest import IsolatedAsyncioTestCase
+
+
+class ThreadedWebhookTests(IsolatedAsyncioTestCase):
+    def callback_function(self):
+        # The suite stubs FastAPI decorators. Compile the actual route body
+        # without decorators so these tests exercise it rather than a mock.
+        import ast
+        from pathlib import Path
+        import app as application
+        tree = ast.parse(Path(application.__file__).read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == "callback")
+        function.decorator_list = []
+        namespace = {}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), application.__file__, "exec"), application.__dict__, namespace)
+        return namespace["callback"]
+
+    async def test_other_users_run_while_one_user_is_blocked_and_same_user_is_ordered(self):
+        import asyncio
+        import threading
+        from bot.event_dispatch import UserEventDispatcher
+        dispatcher = UserEventDispatcher(concurrency=2)
+        entered, release, other_done = threading.Event(), threading.Event(), threading.Event()
+        order = []
+        def first():
+            order.append("first-start")
+            entered.set()
+            release.wait(2)
+            order.append("first-end")
+        first_job = dispatcher.submit("U1", first)
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            second_job = dispatcher.submit("U1", lambda: order.append("second"))
+            other_job = dispatcher.submit("U2", other_done.set)
+            self.assertTrue(await asyncio.to_thread(other_done.wait, 2))
+            self.assertNotIn("second", order)
+        finally:
+            release.set()
+        await asyncio.gather(first_job, second_job, other_job)
+        self.assertEqual(order, ["first-start", "first-end", "second"])
+        self.assertEqual(dispatcher._tails, {})
+
+    async def test_requester_cancellation_does_not_release_user_queue_early(self):
+        import asyncio
+        import threading
+        from bot.event_dispatch import UserEventDispatcher
+        dispatcher = UserEventDispatcher()
+        entered, release = threading.Event(), threading.Event()
+        order = []
+        def work():
+            entered.set()
+            release.wait(2)
+            order.append("first")
+        job = dispatcher.submit("U1", work)
+        async def requester():
+            await asyncio.shield(job)
+        request = asyncio.create_task(requester())
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            request.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await request
+            next_job = dispatcher.submit("U1", lambda: order.append("second"))
+            await asyncio.sleep(0)
+            self.assertEqual(order, [])
+        finally:
+            release.set()
+        await asyncio.gather(job, next_job)
+        self.assertEqual(order, ["first", "second"])
+
+    async def test_failing_event_does_not_block_next_event(self):
+        import asyncio
+        from bot.event_dispatch import UserEventDispatcher
+        dispatcher = UserEventDispatcher()
+        def fail():
+            raise RuntimeError("failed event")
+        first = dispatcher.submit("U1", fail)
+        second = dispatcher.submit("U1", lambda: "next event")
+        result = await asyncio.gather(first, second, return_exceptions=True)
+        self.assertIsInstance(result[0], RuntimeError)
+        self.assertEqual(result[1], "next event")
+        self.assertEqual(dispatcher._tails, {})
+
+    async def test_callback_authenticates_original_body_and_splits_events_for_threads(self):
+        import asyncio
+        import base64
+        import hashlib
+        import hmac
+        import json
+        import threading
+        from types import SimpleNamespace
+        import app as application
+        from bot.event_dispatch import UserEventDispatcher
+        payload = {"destination": "BOT", "events": [
+            {"type": "message", "source": {"type": "user", "userId": "U1"}},
+            {"type": "postback", "source": {"type": "user", "userId": "U2"}}]}
+        raw = json.dumps(payload).encode()
+        async def body():
+            return raw
+        signature = base64.b64encode(hmac.new(application.CHANNEL_SECRET.encode(), raw, hashlib.sha256).digest()).decode()
+        calls = []
+        main_thread = threading.get_ident()
+        def handle(event_body, event_signature):
+            expected = base64.b64encode(hmac.new(application.CHANNEL_SECRET.encode(), event_body.encode(), hashlib.sha256).digest()).decode()
+            self.assertEqual(event_signature, expected)
+            event_payload = json.loads(event_body)
+            self.assertEqual(len(event_payload["events"]), 1)
+            self.assertEqual(event_payload["destination"], "BOT")
+            self.assertNotEqual(threading.get_ident(), main_thread)
+            calls.append(event_payload["events"][0]["source"]["userId"])
+        with patch.object(application, "webhook_dispatcher", UserEventDispatcher()), patch.object(application.handler, "handle", side_effect=handle):
+            self.assertEqual(await self.callback_function()(SimpleNamespace(body=body), signature), {"status": "ok"})
+        self.assertCountEqual(calls, ["U1", "U2"])
+
+    async def test_invalid_signature_is_rejected_before_any_event_is_queued(self):
+        import app as application
+        from types import SimpleNamespace
+        class HTTPError(Exception):
+            def __init__(self, **kwargs):
+                self.status_code = kwargs["status_code"]
+        async def body():
+            return b'{"events": []}'
+        with patch.object(application, "HTTPException", HTTPError), patch.object(application.webhook_dispatcher, "submit") as submit:
+            with self.assertRaises(HTTPError) as raised:
+                await self.callback_function()(SimpleNamespace(body=body), "invalid")
+            self.assertEqual(raised.exception.status_code, 400)
+            submit.assert_not_called()
+
+
+class SingleAttendanceSnapshotTests(TestCase):
+    def layout(self):
+        from database import google_sheets as db
+        sheet = MagicMock()
+        columns = {"student_id": 1, "name": 2, "date": 3, "type": 4, "status": 5,
+                   "raw_message": 6, "attendance_intent": 7, "attendance_record_id": 8}
+        rows = [list(columns), ["S1", "Name", "2026-10-14", "事假", "Confirmed", "original", "TRUE", "REC1"]]
+        return sheet, rows, 1, columns
+
+    def test_admin_upsert_reads_attendance_once_and_preserves_record_id(self):
+        from database import google_sheets as db
+        layout = self.layout()
+        with patch.object(db, "_attendance_header_layout", return_value=layout) as read, \
+             patch.object(db, "_append_audit", return_value="AUDIT1"), \
+             patch.object(db, "schedule_attendance_mirror"):
+            result = db.upsert_attendance_record("S1", "Name", date(2026, 10, 14), "病假", "Uadmin")
+        read.assert_called_once()
+        self.assertEqual(result["attendance_record_id"], "REC1")
+        self.assertEqual(result["old_status"], "事假")
+        values = layout[0].update.call_args.kwargs["values"][0]
+        self.assertEqual(values[3], "病假")
+        self.assertEqual(values[7], "REC1")
+
+    def test_withdrawal_reads_attendance_once(self):
+        from database import google_sheets as db
+        layout = self.layout()
+        with patch.object(db, "_attendance_header_layout", return_value=layout) as read, \
+             patch.object(db, "_append_audit", return_value="AUDIT1"), \
+             patch.object(db, "schedule_attendance_mirror"):
+            db.delete_attendance_record("S1", date(2026, 10, 14), "U1", attendance_record_id="REC1")
+        read.assert_called_once()
+        layout[0].delete_rows.assert_called_once_with(2)
+
+    def test_new_leave_reads_attendance_once(self):
+        from database import google_sheets as db
+        layout = self.layout()
+        with patch.object(db, "ensure_attendance_sheet", return_value=layout[0]), \
+             patch.object(db, "_attendance_header_layout", return_value=layout) as read, \
+             patch.object(db, "schedule_attendance_mirror"):
+            record_id = db.append_attendance_row(["S2", "Other", "2026-10-14", "病假", "Confirmed", "sick leave", True])
+        read.assert_called_once()
+        self.assertTrue(record_id.startswith("ATT-"))
+        self.assertEqual(layout[0].update.call_args.kwargs["range_name"], "A3:H3")
+
+    def test_two_simultaneous_leave_writes_use_different_rows(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        import re
+        from database import google_sheets as db
+        sheet, rows, header, columns = self.layout()
+        entered, release = threading.Event(), threading.Event()
+        read_count = [0]
+        def read():
+            read_count[0] += 1
+            if read_count[0] == 1:
+                entered.set()
+                release.wait(2)
+            return sheet, [row[:] for row in rows], header, columns
+        def update(*, range_name, values, **kwargs):
+            row_number = int(re.search(r"\d+", range_name)[0])
+            while len(rows) < row_number:
+                rows.append([])
+            rows[row_number - 1] = values[0][:]
+        sheet.update.side_effect = update
+        with patch.object(db, "ensure_attendance_sheet", return_value=sheet), \
+             patch.object(db, "_attendance_header_layout", side_effect=read), \
+             patch.object(db, "schedule_attendance_mirror"), ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(db.append_attendance_row, ["S2", "Other", "2026-10-14", "病假", "Confirmed", "first"])
+            try:
+                self.assertTrue(entered.wait(2))
+                second = executor.submit(db.append_attendance_row, ["S3", "Third", "2026-10-14", "事假", "Confirmed", "second"])
+            finally:
+                release.set()
+            self.assertNotEqual(first.result(2), second.result(2))
+        self.assertEqual([row[0] for row in rows[1:]], ["S1", "S2", "S3"])
+        self.assertEqual(read_count[0], 2)

@@ -1,3 +1,6 @@
+import asyncio
+import base64
+import json
 import hashlib
 import hmac
 import os
@@ -39,6 +42,7 @@ from attendance.leave_message import (
 )
 from attendance.salary import calculate_salary
 from bot.language import localize_message, private_language_context
+from bot.event_dispatch import webhook_dispatcher
 from bot.rate_limit import rate_limited
 from bot.delivery import destination, private_responses
 from bot import admin_portal
@@ -168,17 +172,31 @@ async def callback(
             detail="Missing LINE signature",
         )
 
+    # Authenticate the original bytes before any event is queued.
+    expected = base64.b64encode(hmac.new(CHANNEL_SECRET.encode(), body, hashlib.sha256).digest()).decode()
+    if not hmac.compare_digest(expected.encode(), x_line_signature.encode()):
+        raise HTTPException(status_code=400, detail="Invalid LINE signature")
     try:
-        handler.handle(
-            body.decode("utf-8"),
-            x_line_signature,
-        )
+        payload = json.loads(body)
+        if not isinstance(payload, dict) or not isinstance(payload.get("events", []), list):
+            raise ValueError("Invalid webhook payload")
+        events = payload.get("events", [])
+        if any(not isinstance(event, dict) or not isinstance(event.get("source", {}), dict) for event in events):
+            raise ValueError("Invalid webhook event")
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid LINE webhook body")
 
-    except InvalidSignatureError:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid LINE signature",
-        )
+    jobs = []
+    for event in events:
+        source = event.get("source", {})
+        key = source.get("userId") or source.get("groupId") or source.get("roomId") or "system"
+        # Retain SDK parsing/routing, but dispatch each already-authenticated
+        # event separately so one slow sender doesn't delay everyone in a batch.
+        event_body = json.dumps({**payload, "events": [event]}, ensure_ascii=False)
+        event_signature = base64.b64encode(hmac.new(CHANNEL_SECRET.encode(), event_body.encode(), hashlib.sha256).digest()).decode()
+        jobs.append(webhook_dispatcher.submit(key, lambda body=event_body, signature=event_signature: handler.handle(body, signature)))
+    if jobs:
+        await asyncio.gather(*(asyncio.shield(job) for job in jobs))
 
     return {"status": "ok"}
 

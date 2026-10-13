@@ -4,6 +4,7 @@ import json
 import os
 import re
 import threading
+from functools import wraps
 from datetime import date, datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -78,6 +79,19 @@ spreadsheet = None
 logs_spreadsheet = None
 LOG_WORKSHEET_NAMES = {"Attendance", "Logs", "Tickets", "User Settings"}
 _attendance_mirror_lock = threading.RLock()
+_attendance_table_lock = threading.RLock()
+_sheets_init_lock = threading.RLock()
+
+
+def _locked(lock):
+    def decorate(function):
+        @wraps(function)
+        def wrapped(*args, **kwargs):
+            with lock:
+                return function(*args, **kwargs)
+        return wrapped
+    return decorate
+
 students_sheet = None
 attendance_sheet = None
 logs_sheet = None
@@ -115,6 +129,7 @@ def connect_google_sheets(id_variable="GOOGLE_SHEET_ID"):
     return client.open_by_key(spreadsheet_id)
 
 
+@_locked(_sheets_init_lock)
 def ensure_sheet_state():
     """Create the workbook handles only when the Google Sheets config exists."""
 
@@ -433,6 +448,7 @@ def get_report_students() -> tuple[dict[str, StudentDisplay], int]:
     return students, len(students)
 
 
+@_locked(_attendance_table_lock)
 def register_line_user(
     student_row: dict[str, object],
     line_user_id: str,
@@ -484,6 +500,7 @@ def _ensure_named_sheet(name: str, headers: list[str]):
     return worksheet_handles.get((workbook, name), load, ttl=30, copy=False)
 
 
+@_locked(_attendance_table_lock)
 def _attendance_header_layout():
     sheet = ensure_attendance_sheet()
     if sheet is None:
@@ -711,10 +728,11 @@ def _attendance_row_values(
     return values
 
 
-def get_attendance_rows(target_date: date | None = None) -> list[dict[str, str]]:
+@_locked(_attendance_table_lock)
+def get_attendance_rows(target_date: date | None = None, *, _layout=None) -> list[dict[str, str]]:
     """Read attendance entries, optionally filtered to one date."""
 
-    _, rows, header_row, columns = _attendance_header_layout()
+    _, rows, header_row, columns = _layout if _layout is not None else _attendance_header_layout()
     records = []
     for row_number, row in enumerate(rows[header_row:], start=header_row + 1):
         record = {
@@ -735,22 +753,24 @@ def get_attendance_rows(target_date: date | None = None) -> list[dict[str, str]]
     return records
 
 
-def get_attendance_record(student_id: str, target_date: date) -> dict[str, str] | None:
+@_locked(_attendance_table_lock)
+def get_attendance_record(student_id: str, target_date: date, *, _layout=None) -> dict[str, str] | None:
     matches = [
-        row for row in get_attendance_rows(target_date)
+        row for row in get_attendance_rows(target_date, _layout=_layout)
         if row.get("student_id") == student_id
     ]
     return matches[-1] if matches else None
 
 
-def get_attendance_record_by_id(record_id: str) -> dict[str, str] | None:
+@_locked(_attendance_table_lock)
+def get_attendance_record_by_id(record_id: str, *, _layout=None) -> dict[str, str] | None:
     """Find an attendance row by its stable record ID."""
 
     if not record_id:
         return None
     return next(
         (
-            row for row in get_attendance_rows()
+            row for row in get_attendance_rows(_layout=_layout)
             if row.get("attendance_record_id") == record_id
         ),
         None,
@@ -801,6 +821,7 @@ def _mark_audit_action(action_id: str, action: str, details: str = "") -> None:
     raise RuntimeError(f"Audit action {action_id} could not be found.")
 
 
+@_locked(_attendance_table_lock)
 def upsert_attendance_record(
     student_id: str,
     student_name: str,
@@ -817,7 +838,7 @@ def upsert_attendance_record(
         from attendance.leave_message import validate_leave_workday
         validate_leave_workday(target_date)
     sheet, rows, header_row, columns = _attendance_header_layout()
-    previous = get_attendance_record(student_id, target_date)
+    previous = get_attendance_record(student_id, target_date, _layout=(sheet, rows, header_row, columns))
     old_status = previous.get("type", "") if previous else ""
     values_by_header = {
         "student_id": student_id,
@@ -894,6 +915,7 @@ def _column_letter(column: int) -> str:
     return letters
 
 
+@_locked(_attendance_table_lock)
 def delete_attendance_record(
     student_id: str,
     target_date: date,
@@ -904,10 +926,11 @@ def delete_attendance_record(
 ) -> dict[str, str] | None:
     """Remove one entry and preserve its prior value in the audit sheet."""
 
+    layout = _attendance_header_layout()
     previous = (
-        get_attendance_record_by_id(attendance_record_id)
+        get_attendance_record_by_id(attendance_record_id, _layout=layout)
         if attendance_record_id
-        else get_attendance_record(student_id, target_date)
+        else get_attendance_record(student_id, target_date, _layout=layout)
     )
     if previous is None:
         return None
@@ -925,7 +948,7 @@ def delete_attendance_record(
         "回菲律賓",
     }:
         return None
-    sheet, _, _, _ = _attendance_header_layout()
+    sheet, _, _, _ = layout
     row_number = int(previous["_row_number"])
     old_status = previous.get("type", "")
     old_values = dict(previous)
@@ -947,16 +970,18 @@ def delete_attendance_record(
     return {"old_status": old_status, "action_id": action_id}
 
 
+@_locked(_attendance_table_lock)
 def clear_student_attendance(student_id: str, target_date: date, actor_line_user_id: str):
     """Clear all records for one student/date and its grid cell with one audit."""
     entries = get_monthly_report_entries(student_id, target_date)
     if target_date not in entries:
         raise ValueError("Choose a scheduled date before clearing attendance.")
-    records = [row for row in get_attendance_rows(target_date) if str(row.get("student_id", "")).strip() == student_id]
+    layout = _attendance_header_layout()
+    records = [row for row in get_attendance_rows(target_date, _layout=layout) if str(row.get("student_id", "")).strip() == student_id]
     previous = entries[target_date]
     if not records and not previous:
         return {"action_id": "", "old_status": ""}
-    sheet, _, _, _ = _attendance_header_layout()
+    sheet, _, _, _ = layout
     action_id = _append_audit(actor_line_user_id, "CLEAR", student_id, target_date, previous, "", json.dumps({"records": records, "monthly_status": previous}, ensure_ascii=False))
     try:
         for record in sorted(records, key=lambda row: int(row["_row_number"]), reverse=True):
@@ -970,6 +995,7 @@ def clear_student_attendance(student_id: str, target_date: date, actor_line_user
     return {"action_id": action_id, "old_status": previous}
 
 
+@_locked(_attendance_table_lock)
 def undo_last_attendance_action(actor_line_user_id: str) -> dict[str, str] | None:
     """Undo the actor's most recent un-undone attendance mutation."""
 
@@ -1161,6 +1187,7 @@ def update_ticket(ticket_id: str, actor_line_user_id: str, *, close: bool, note:
     return False
 
 
+@_locked(_attendance_table_lock)
 def append_attendance_row(values: list[object]) -> str | None:
     """Append attendance under the configured table headers and return its ID."""
 

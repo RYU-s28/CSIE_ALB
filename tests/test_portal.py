@@ -998,13 +998,10 @@ class TestAdminPortal(TestCase):
         ), patch("database.google_sheets.get_ticket", return_value=self.ticket):
             return preview_message("Uadmin", self.student, self.day, status, ticket)
 
-    def test_admin_portal_has_requested_six_actions(self):
+    def test_admin_portal_has_three_shortcuts(self):
         from bot.admin_portal import portal_message
         labels = [item["action"]["label"] for item in portal_message().contents.data["footer"]["contents"]]
-        self.assertIn("Attendance Status", labels)
-        self.assertIn("Help Center · Tickets", labels)
-        self.assertNotIn("Leave Request", labels)
-        self.assertEqual(len(labels), 6)
+        self.assertEqual(labels, ["My Attendance", "Salary Inquiry", "Change Language"])
 
     def test_every_admin_action_rejects_nonadmin(self):
         from bot.admin_portal import handle_postback
@@ -1223,13 +1220,12 @@ class TestAdminSafeguards(TestCase):
                 handle_postback(data, "Uadmin")
             write.assert_not_called()
 
-    def test_student_portal_has_clickable_six_actions(self):
+    def test_student_portal_has_three_shortcuts(self):
         from bot.line_ui import portal_menu_message
         buttons = [row for row in portal_menu_message().contents.data["body"]["contents"] if row.get("type") == "button"]
-        self.assertEqual(len(buttons), 6)
         labels = [button["action"]["label"] for button in buttons]
-        self.assertIn("Leave Request", labels)
-        self.assertNotIn("Attendance Status", labels)
+        self.assertEqual(labels, ["My Attendance", "Salary Inquiry", "Change Language"])
+        self.assertEqual(buttons[2]["action"]["data"], "action=language_settings")
 
     def test_ticket_resolution_note_and_actor_are_stored(self):
         from database.google_sheets import update_ticket

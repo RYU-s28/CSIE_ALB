@@ -61,11 +61,8 @@ def date_button(name, day, **values):
 def portal_message():
     return card("Admin Portal", [paragraph("Manage student requests and attendance privately in LINE.")], [
         _button("My Attendance", "action=richmenu_attendance", margin="none"),
-        _button("Leave History", "action=richmenu_leave_history", margin="none"),
         _button("Salary Inquiry", "action=richmenu_salary", margin="none"),
-        _button("Time Out Report", "action=admin_timeout", margin="none"),
-        _button("Attendance Status", "action=admin_attendance", margin="none"),
-        _button("Help Center · Tickets", "action=admin_tickets", margin="none"),
+        _button("Change Language", "action=language_settings", margin="none"),
     ], subtitle="Administrator workspace")
 
 

@@ -941,12 +941,8 @@ def welcome_message(
                     ],
                 },
                 _button("My Attendance", "action=richmenu_attendance", margin="sm"),
-                _button("Leave History", "action=richmenu_leave_history", margin="xs"),
                 _button("Salary Inquiry", "action=richmenu_salary", margin="xs"),
-                _button("Work Schedule", "action=richmenu_schedule", margin="xs"),
-                _button("Leave Request", "action=richmenu_leave_request", margin="xs"),
-                _button("Help Center", "action=richmenu_help", margin="xs"),
-                _button("Language / 語言", "action=language_settings", margin="md"),
+                _button("Change Language", "action=language_settings", margin="xs"),
                 _button("Authorize", "action=authorize_account", color=DEDUCTION_RED, margin="md"),
             ],
         },
@@ -958,11 +954,8 @@ def welcome_message(
         quick_reply=QuickReply(
             items=[
                 QuickReplyItem(action=PostbackAction(label="My Attendance", data="action=richmenu_attendance", display_text="My Attendance")),
-                QuickReplyItem(action=PostbackAction(label="Leave History", data="action=richmenu_leave_history", display_text="Leave History")),
                 QuickReplyItem(action=PostbackAction(label="Salary Inquiry", data="action=richmenu_salary", display_text="Salary Inquiry")),
-                QuickReplyItem(action=PostbackAction(label="Work Schedule", data="action=richmenu_schedule", display_text="Work Schedule")),
-                QuickReplyItem(action=PostbackAction(label="Leave Request", data="action=richmenu_leave_request", display_text="Leave Request")),
-                QuickReplyItem(action=PostbackAction(label="Help Center", data="action=richmenu_help", display_text="Help Center")),
+                QuickReplyItem(action=PostbackAction(label="Change Language", data="action=language_settings", display_text="Change Language")),
             ]
         ),
     )
@@ -1161,12 +1154,8 @@ def terms_agreement_confirmed_message(
                     ],
                 },
                 _button("My Attendance", "action=richmenu_attendance", margin="sm"),
-                _button("Leave History", "action=richmenu_leave_history", margin="xs"),
                 _button("Salary Inquiry", "action=richmenu_salary", margin="xs"),
-                _button("Work Schedule", "action=richmenu_schedule", margin="xs"),
-                _button("Leave Request", "action=richmenu_leave_request", margin="xs"),
-                _button("Help Center", "action=richmenu_help", margin="xs"),
-                _button("Language / 語言", "action=language_settings", margin="md"),
+                _button("Change Language", "action=language_settings", margin="xs"),
             ],
         },
     }
@@ -1177,11 +1166,8 @@ def terms_agreement_confirmed_message(
         quick_reply=QuickReply(
             items=[
                 QuickReplyItem(action=PostbackAction(label="My Attendance", data="action=richmenu_attendance", display_text="My Attendance")),
-                QuickReplyItem(action=PostbackAction(label="Leave History", data="action=richmenu_leave_history", display_text="Leave History")),
                 QuickReplyItem(action=PostbackAction(label="Salary Inquiry", data="action=richmenu_salary", display_text="Salary Inquiry")),
-                QuickReplyItem(action=PostbackAction(label="Work Schedule", data="action=richmenu_schedule", display_text="Work Schedule")),
-                QuickReplyItem(action=PostbackAction(label="Leave Request", data="action=richmenu_leave_request", display_text="Leave Request")),
-                QuickReplyItem(action=PostbackAction(label="Help Center", data="action=richmenu_help", display_text="Help Center")),
+                QuickReplyItem(action=PostbackAction(label="Change Language", data="action=language_settings", display_text="Change Language")),
             ]
         ),
     )
@@ -1239,8 +1225,7 @@ def portal_menu_message() -> FlexMessage:
             {"type": "text", "text": "Portal Menu", "size": "sm", "color": MUTED_TEXT, "margin": "xs"},
             *[_button(label, f"action={action}", margin="sm") for label, action in [
                 ("My Attendance", "richmenu_attendance"), ("Salary Inquiry", "richmenu_salary"),
-                ("Work Schedule", "richmenu_schedule"), ("Leave History", "richmenu_leave_history"),
-                ("Leave Request", "richmenu_leave_request"), ("Help Center", "richmenu_help"),
+                ("Change Language", "language_settings"),
             ]],
         ]},
     }))

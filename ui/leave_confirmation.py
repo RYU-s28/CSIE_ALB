@@ -32,6 +32,8 @@ def _pill(text: str, *, bg: str = BADGE_BG, color: str = BADGE_TEXT) -> dict[str
     return {
         "type": "box",
         "layout": "vertical",
+        "flex": 0,
+        "width": "80px",
         "backgroundColor": bg,
         "cornerRadius": "xxl",
         "paddingStart": "8px",
@@ -46,6 +48,7 @@ def _pill(text: str, *, bg: str = BADGE_BG, color: str = BADGE_TEXT) -> dict[str
                 "color": color,
                 "weight": "bold",
                 "align": "center",
+                "wrap": True,
             }
         ],
     }
@@ -85,6 +88,8 @@ def leave_confirmation_message(
                 {
                     "type": "box",
                     "layout": "horizontal",
+                    "spacing": "sm",
+                    "alignItems": "center",
                     "contents": [
                         {
                             "type": "text",
@@ -93,6 +98,7 @@ def leave_confirmation_message(
                             "size": "xl",
                             "color": DARK_GREEN,
                             "flex": 4,
+                            "wrap": True,
                         },
                         _pill(badge_label),
                     ],

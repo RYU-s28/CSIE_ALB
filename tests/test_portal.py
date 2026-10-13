@@ -1119,16 +1119,22 @@ class TestAdminPortal(TestCase):
         import json
         self.assertIn(selected.isoformat(), json.dumps(card.contents.data))
 
-    def test_report_pagination_and_paid_leave_summary(self):
+    def test_current_report_preview_and_paid_leave_summary(self):
         from bot.admin_portal import daily_report_message, attendance_message
+        from attendance.report import DailyReportText, GroupReportText
         rows = [{"student_id": str(index), "name": "Student", "type": "特休"} for index in range(12)]
-        with patch("database.google_sheets.get_daily_monthly_report", return_value=rows):
-            first = daily_report_message(self.day)
-            second = daily_report_message(self.day, page=1)
+        with patch("database.google_sheets.get_daily_monthly_report", return_value=rows), \
+             patch("database.google_sheets.get_report_students", return_value=({}, 12)), \
+             patch("bot.commands._records_for_date", return_value=[]), \
+             patch("attendance.time_out.save_morning") as save:
+            report = daily_report_message(self.day)
             summary = attendance_message(self.day)
-        import json
-        self.assertIn("Next Page", json.dumps(first.contents.data))
-        self.assertIn("Previous Page", json.dumps(second.contents.data))
+        self.assertIsInstance(report, DailyReportText)
+        self.assertNotIsInstance(report, GroupReportText)
+        self.assertIn("應到人數：12", report)
+        save.assert_not_called()
+        labels = [button["action"]["label"] for button in summary.contents.data["footer"]["contents"]]
+        self.assertEqual(labels, ["View Daily Report", "Edit Leave", "Choose Date"])
         stat_rows = summary.contents.data["body"]["contents"]
         values = {row["contents"][0]["text"]: row["contents"][1]["text"] for row in stat_rows if row.get("layout") == "horizontal"}
         self.assertEqual(values["Present / Paid Leave"], "12")
@@ -1712,6 +1718,29 @@ class TestDirectEditAndClear(TestCase):
         self.assertIn("Search Results", result.alt_text)
         editor.assert_not_called()
 
+    def test_edit_status_shortcuts_apply_with_optional_month_day(self):
+        from bot.admin_portal import edit_shortcut, STATUSES
+        commands = [("Edit 10/14 杜榮瑪 Clear", "clear"),
+                    ("Edit 10/14 s06677 Clear", "clear")]
+        commands += [("Edit S06677 " + label, key) for label, key in (
+            ("present", "present"), ("sick leave", "sick"), ("personal", "personal"),
+            ("menstrual", "menstrual"), ("annual", "annual"), ("half day", "half"),
+            ("late", "late"), ("pending", "pending"))]
+        for command, key in commands:
+            with self.subTest(command=command), \
+                 patch("database.google_sheets.find_student_by_id", return_value=self.student), \
+                 patch("database.google_sheets.get_monthly_report_entries", return_value={self.day: "病假"}), \
+                 patch("bot.admin_portal.today", return_value=self.day), \
+                 patch("bot.admin_portal._snapshot", return_value=("snapshot", "病假")), \
+                 patch("attendance.leave_message.validate_leave_workday"), \
+                 patch("bot.admin_portal.handle_postback", return_value="saved") as apply:
+                self.assertEqual(edit_shortcut(command, "Uadmin"), "saved")
+                data, actor = apply.call_args.args
+                self.assertEqual(data["status"], [key])
+                self.assertEqual(data["date"], ["2026-10-14"])
+                self.assertEqual(data["student"], ["S06677"])
+                self.assertEqual(actor, "Uadmin")
+
     def test_nonadmin_shortcut_does_not_read_students(self):
         from bot.admin_portal import edit_shortcut
         with patch("database.google_sheets.find_student_by_id") as read:
@@ -1872,3 +1901,32 @@ class SeparateLogsWorkbookTests(TestCase):
             self.assertIs(db.ensure_sheet_state(), main)
             self.assertIs(db.logs_spreadsheet, main)
             connect.assert_called_once_with()
+
+
+class ImmediateAdminStatusTests(TestCase):
+    def test_new_and_old_status_buttons_save_without_confirmation(self):
+        from bot.admin_portal import handle_postback
+        student = {"student_id": "S06677", "name": "杜榮瑪"}
+        day = date(2026, 10, 14)
+        for action_name in ("admin_change", "admin_preview"):
+            for status in ("sick", "clear"):
+                with self.subTest(action=action_name, status=status), \
+                     patch.dict(os.environ, {"ADMIN_LINE_USER_IDS": "Uadmin"}), \
+                     patch("database.google_sheets.find_student_by_id", return_value=student), \
+                     patch("database.google_sheets.get_monthly_report_entries", return_value={day: "事假"}), \
+                     patch("database.google_sheets.get_attendance_record", return_value=None), \
+                     patch("database.google_sheets.upsert_attendance_record", return_value={"action_id": "A1"}) as write, \
+                     patch("database.google_sheets.update_monthly_report_cell", return_value=True) as grid, \
+                     patch("database.google_sheets.clear_student_attendance", return_value={"action_id": "A2"}) as clear, \
+                     patch("bot.admin_portal.preview_message") as preview:
+                    result = handle_postback({"action": [action_name], "student": ["S06677"],
+                                              "date": [day.isoformat()], "status": [status]}, "Uadmin")
+                    preview.assert_not_called()
+                    if status == "clear":
+                        self.assertIn("Attendance Cleared", result.alt_text)
+                        clear.assert_called_once_with("S06677", day, "Uadmin")
+                        write.assert_not_called()
+                    else:
+                        self.assertIn("Attendance Updated", result.alt_text)
+                        self.assertEqual(write.call_args.args[3], "病假")
+                        grid.assert_called_once_with("S06677", day, "病假")

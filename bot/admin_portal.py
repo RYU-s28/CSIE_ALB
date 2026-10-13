@@ -136,29 +136,19 @@ def attendance_message(day):
         paragraph("Monthly Report is the source. Blank today remains pending; past blank workdays count as present."),
     ], [
         _button("View Daily Report", action("admin_daily", date=day), margin="none"),
-        _button("Add / Edit / Remove Leave", action("admin_students", date=day), margin="none"),
+        _button("Edit Leave", action("admin_students", date=day), margin="none"),
         date_button("admin_attendance" , day),
-        _button("Refresh Status", action("admin_attendance", date=day), margin="none"),
-        _button("Admin Portal", "action=admin_portal", margin="none"),
     ], subtitle=day.isoformat())
 
 
 def daily_report_message(day, page=0):
-    rows = db.get_daily_monthly_report(day)
-    page = min(max(0, page), max(0, (len(rows) - 1) // 10))
-    contents = []
-    for row in rows[page * 10:(page + 1) * 10]:
-        status = row["type"] or ("Present" if day < today() else "Pending" if day == today() else "Upcoming")
-        contents.append(paragraph(f"{row['student_id']} · {row['name']}\n{status}"))
-    buttons = [
-        _button("Edit Attendance", action("admin_students", date=day), margin="none"),
-        _button("Back to Status", action("admin_attendance", date=day), margin="none"),
-    ]
-    if page:
-        buttons.append(_button("Previous Page", action("admin_daily", date=day, page=page - 1), margin="none"))
-    if (page + 1) * 10 < len(rows):
-        buttons.append(_button("Next Page", action("admin_daily", date=day, page=page + 1), margin="none"))
-    return card("Daily Attendance Report", contents or [paragraph("No active students.")], buttons, subtitle=f"{day.isoformat()} · Page {page + 1}")
+    """Preview the current group report privately without issuing or saving it."""
+    from bot.commands import _records_for_date
+    from attendance.report import build_report
+    students, expected = db.get_report_students()
+    return build_report(report_date=day, total_students=expected,
+                        expected_students=expected, students=students,
+                        records=_records_for_date(day))
 
 
 def search_button(day, *, query="", bus=False):
@@ -205,7 +195,7 @@ def student_message(student, day, ticket_id=None):
     short_labels = {"present": "Present", "sick": "Sick Leave", "personal": "Personal", "menstrual": "Menstrual", "annual": "Annual · Paid", "half": "Half Day", "late": "Late", "absent": "Absent", "pending": "Pending", "clear": "Clear"}
     choices = []
     for key in STATUSES:
-        button = _button(short_labels[key], action("admin_preview", student=student["student_id"], date=day, status=key, ticket=ticket_id), margin="none")
+        button = _button(short_labels[key], action("admin_change", student=student["student_id"], date=day, status=key, ticket=ticket_id), margin="none")
         if key == "clear":
             button["color"] = DEDUCTION_RED
         button["flex"] = 1
@@ -222,7 +212,7 @@ def student_message(student, day, ticket_id=None):
         _stat_row("Student Name", name, margin="md"),
         _stat_row("Student ID", str(student["student_id"]), margin="xs"),
         _stat_row("Current Status", current, margin="xs"),
-        paragraph("Present records attendance. Clear removes the saved record and blanks the report cell. Annual leave is paid. Preview before saving."),
+        paragraph("Tap a status to save immediately. Present records attendance. Clear removes the saved record and blanks the report cell. Annual leave is paid."),
         *grid,
     ], [date_button("admin_student", day, student=student["student_id"], ticket=ticket_id), _button("Back to Ticket" if ticket_id else "Find Another Student", cancel, margin="none")], subtitle=day.isoformat())
 
@@ -236,12 +226,26 @@ def edit_shortcut(message, actor):
     match = re.fullmatch(r"\s*/?edit(?:\s+(.*))?\s*", message, flags=re.IGNORECASE)
     query = (match.group(1) or "").strip() if match else ""
     if not query:
-        return card("Edit Attendance", [paragraph("Send Edit followed by a name or student ID. Optional date: Edit S06677 2026-10-14.")])
+        return card("Edit Attendance", [paragraph("Send Edit followed by a name or student ID. Examples: Edit S06677; Edit 杜榮瑪 sick leave; Edit 10/14 S06677 clear.")])
     explicit_day = None
-    date_match = re.search(r"(?:^|\s)(\d{4}-\d{2}-\d{2})$", query)
+    # Dates may precede or follow the identity; month/day uses the Taipei year.
+    date_match = re.search(r"(?:^|\s)(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2})(?=\s|$)", query)
     if date_match:
-        explicit_day = date.fromisoformat(date_match[1])
-        query = query[:date_match.start()].strip()
+        value = date_match[1]
+        explicit_day = (date.fromisoformat(value) if "-" in value else
+                        date(today().year, *map(int, value.split("/"))))
+        query = (query[:date_match.start()] + " " + query[date_match.end():]).strip()
+    status_key = None
+    aliases = {key: key for key in STATUSES}
+    aliases.update({"sick leave": "sick", "personal leave": "personal",
+                    "menstrual leave": "menstrual", "annual leave": "annual",
+                    "half day": "half", "pending review": "pending"})
+    for label in sorted(aliases, key=len, reverse=True):
+        status_match = re.search(r"\s+" + re.escape(label) + r"$", query, re.IGNORECASE)
+        if status_match:
+            status_key = aliases[label]
+            query = query[:status_match.start()].strip()
+            break
     query = query.strip('"\'')
     if not query:
         raise ValueError("Include a student name or ID after Edit.")
@@ -258,6 +262,16 @@ def edit_shortcut(message, actor):
             future_days = sorted(value for value in entries if value > day)
             if future_days:
                 day = future_days[0]
+    if status_key is not None:
+        from urllib.parse import parse_qs
+        from attendance.leave_message import validate_leave_workday
+        status = STATUSES[status_key][1]
+        if status_key != "clear" and status not in {"出席", "遲到"}:
+            validate_leave_workday(day)
+        snapshot, _ = _snapshot(str(student["student_id"]), day, None)
+        data = parse_qs(signed_action(actor, "admin_apply", student=student["student_id"],
+                                     date=day, status=status_key, snapshot=snapshot))
+        return handle_postback(data, actor)
     return student_message(student, day)
 
 
@@ -376,8 +390,17 @@ def handle_postback(data, actor, params=None, notify=None):
     status_key = get("status")
     if status_key not in STATUSES:
         raise ValueError("Unsupported attendance status.")
-    if name == "admin_preview":
-        return preview_message(actor, student, day, status_key, ticket_id)
+    if name in {"admin_change", "admin_preview"}:
+        # Old cards used admin_preview; they now also save on the first tap.
+        from urllib.parse import parse_qs
+        from attendance.leave_message import validate_leave_workday
+        status = STATUSES[status_key][1]
+        if status_key != "clear" and status not in {"出席", "遲到"}:
+            validate_leave_workday(day)
+        snapshot, _ = _snapshot(str(student["student_id"]), day, ticket_id)
+        immediate = signed_action(actor, "admin_apply", student=student["student_id"],
+                                  date=day, status=status_key, ticket=ticket_id, snapshot=snapshot)
+        return handle_postback(parse_qs(immediate), actor, notify=notify)
     if name == "admin_apply":
         verify_action(actor, data)
         snapshot, previous = _snapshot(str(student["student_id"]), day, ticket_id)

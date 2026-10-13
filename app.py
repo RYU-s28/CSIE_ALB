@@ -909,6 +909,10 @@ def handle_postback(event):
         reply_to_line(event.reply_token, admin_portal.portal_message() if is_admin_user(user_id) else welcome_message(student=student))
         return
 
+    if action == "start_using":
+        reply_to_line(event.reply_token, admin_portal.portal_message() if is_admin_user(user_id) else portal_menu_message())
+        return
+
     if action == "view_terms":
         reply_to_line(event.reply_token, terms_of_use_message())
         return

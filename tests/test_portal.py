@@ -542,12 +542,12 @@ class TestLanguageSettings(TestCase):
 
 
 class TestAccountAuthorization(TestCase):
-    def test_terms_button_is_last_for_both_account_states(self):
+    def test_start_using_button_is_last_for_both_account_states(self):
         for student in (None, {"student_id": "ST101", "name": "Romel"}):
             card = initialization_message(student)
             button = card.contents.data["footer"]["contents"][-1]
-            self.assertEqual(button["action"]["label"], "Terms & Usage")
-            self.assertEqual(button["action"]["data"], "action=view_terms")
+            self.assertEqual(button["action"]["label"], "Start Using")
+            self.assertEqual(button["action"]["data"], "action=start_using")
 
     def test_first_chat_saves_line_id_to_matching_roster_row(self):
         from app import identify_or_register_student
@@ -774,7 +774,9 @@ class TestCompactAuthorizationCard(TestCase):
             buttons = data["footer"]["contents"]
             self.assertEqual(buttons[0]["action"]["label"], "Terms & Usage")
             self.assertEqual(buttons[0]["action"]["data"], "action=view_terms")
-            self.assertEqual(len(buttons), 1)
+            self.assertEqual(len(buttons), 2)
+            self.assertEqual(buttons[1]["action"]["data"], "action=start_using")
+            self.assertEqual(buttons[1]["margin"], "8px")
             self.assertNotIn("authorize_account", json.dumps(data))
             self.assertNotIn("language_settings", json.dumps(data))
             self.assertNotIn("Terms & Usage Notice", json.dumps(data))

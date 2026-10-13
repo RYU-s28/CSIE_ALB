@@ -1039,6 +1039,7 @@ def initialization_message(
         "body": {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "paddingAll": "16px", "contents": body_contents},
         "footer": {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "spacing": "sm", "paddingAll": "16px", "contents": [
             _button("Terms & Usage", "action=view_terms", color=BUTTON_GREEN, margin="none"),
+            _button("Start Using", "action=start_using", color=BUTTON_GREEN, margin="8px"),
         ]},
     }
     return FlexMessage(

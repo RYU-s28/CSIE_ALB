@@ -123,6 +123,9 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     finally:
         if scheduler.running:
             scheduler.shutdown(wait=False)
+        import asyncio
+        from database.mirror_worker import close_mirror_worker
+        await asyncio.to_thread(close_mirror_worker)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -896,8 +899,6 @@ def handle_postback(event):
             return
         language = data.get("language", [""])[0]
         try:
-            if language == "zh-TW" and not os.getenv("GEMINI_API_KEY"):
-                raise RuntimeError("AI translation is not configured.")
             set_user_language(user_id, language)
             reply_to_line(event.reply_token, "Language set to English." if language == "en" else "語言已設定為繁體中文。")
         except (ValueError, RuntimeError):

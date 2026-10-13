@@ -276,7 +276,7 @@ def edit_shortcut(message, actor):
 
 
 def _snapshot(student_id, day, ticket_id):
-    entries = db.get_monthly_report_entries(student_id, day)
+    entries = db.get_monthly_report_entries(student_id, day, fresh=True)
     if day not in entries:
         raise ValueError("The selected date is not scheduled in the Monthly Report.")
     record = db.get_attendance_record(student_id, day)

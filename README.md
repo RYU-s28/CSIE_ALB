@@ -16,13 +16,15 @@ spreadsheet that cannot be opened causes initialization to fail rather than
 writing logs into the original file. Restart the bot after changing these IDs.
 
 The existing `Attendance` tab in `GOOGLE_SHEET_ID` is a synchronized copy of the
-logs workbook's attendance records. It refreshes on initialization and attendance
-mutations, including deletions. Raw messages are blanked in the copy; the copy
+logs workbook's attendance records. It refreshes in a background worker on initialization and attendance
+mutations, including deletions; replies do not wait for the copy. Pending refreshes
+are coalesced, and failures are retried every 30 seconds. Raw messages are blanked in the copy; the copy
 may also omit the `raw_message` column entirely. Its existing attendance headers
 must be present, and the bot does not create a replacement tab. Edit attendance
 through the bot or the logs workbook; the main copy is overwritten on refresh.
 If synchronization fails, the primary log remains saved and the server logs
-`ATTENDANCE MIRROR SYNC ERROR`; the next refresh retries the full copy.
+`ATTENDANCE MIRROR SYNC ERROR`; the worker retries the full copy. Restarting the
+bot also requests a fresh copy from the authoritative logs workbook.
 
 The bot writes attendance to the `Attendance` worksheet, with columns
 `student_id`, `name`, `date`, `type`, `status`, `raw_message`, and
@@ -134,15 +136,29 @@ count as attended, half-days count as 0.5, and future leave is excluded from
 month-to-date totals. Missing report sections or student rows produce a retrieval
 error instead of falling back to leave records.
 
+## Read caching and responsiveness
+
+Roster and language-setting snapshots are cached for 30 seconds, monthly report
+views for 5 seconds, and worksheet handles for 30 seconds. These bounded caches
+are process-local and return copies of snapshots. Registration, language changes,
+and monthly report writes invalidate affected snapshots. Admin mutation checks
+read a fresh monthly snapshot, and registration checks the live UID cell before
+writing. Manual spreadsheet changes appear after the applicable TTL; bot changes
+are reflected immediately. Attendance log writes and audit records remain
+synchronous; only the non-authoritative Attendance copy runs in the background.
+
 ## Language settings and first greeting
 
 The bot's initial account card is English and its title is `CSIE Student`.
-Students can open **Language / 語言** from the welcome or initialization card,
+Students can open **Change Language** from the portal menu,
 or send `/language` or `/settings` in a private chat. Choose **English** or
 **繁體中文**. Preferences persist by LINE user ID in the `User Settings` sheet.
-English is the default. AI translates visible private reply text and Flex cards
-using `GEMINI_API_KEY`; IDs and button action data remain unchanged. Translations
-are cached in memory. If translation fails, the original message is sent.
+English is the default. Standard UI text is translated locally using the fixed
+English/Traditional Chinese catalog in `bot/ui_translations.py`. Language switching
+requires no translation API, Gemini key, or translation usage charges. Names,
+IDs, dates, numbers, and button action data are preserved. Free-form content and
+wording not in the catalog retain their original text; Gemini still handles
+uncertain leave classification separately.
 Official group reports preserve their original Chinese plain-text format. The fixed LINE rich-menu image
 is not translated.
 
@@ -190,7 +206,7 @@ The form's date/category syntax stays in English when display labels are transla
 Keyboard autofill requires LINE for iOS/Android 12.6.0 or later; the bot also sends
 manual typing instructions for unsupported clients.
 
-Identity fields on cards are preserved verbatim during AI translation, including
+Identity fields on cards are preserved verbatim during UI localization, including
 LINE names for unmatched accounts. Embedded names are masked before translation.
 Roster matching ignores spaces around `/` (for example, `Name /nickname` matches
 `Name/nickname`) while retaining all name characters and duplicate-name checks.
@@ -264,7 +280,7 @@ be friends with the bot for LINE to display their per-user menu.
 
 Daily attendance report text from `/report`, `/summary`, and scheduled reports
 retains its original Chinese plain-text format (date, 應到人數, 實到人數, and
-category lists). It bypasses card conversion and AI translation. Other portal
+category lists). It bypasses card conversion and UI localization. Other portal
 and ticket replies still use cards.
 
 ## Admin Time Out Report (下班回校報告)

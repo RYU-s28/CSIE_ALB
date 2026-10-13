@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials
 from gspread.exceptions import WorksheetNotFound
 
+from database.read_cache import cached_values, sheet_reads, worksheet_handles
 from attendance.classifier import classify_status
 from attendance.student_directory import (
     find_student_by_line_user_id as find_student,
@@ -184,7 +185,7 @@ def ensure_sheet_state():
             value_input_option="RAW",
         )
 
-    sync_attendance_mirror()
+    schedule_attendance_mirror()
     return spreadsheet
 
 
@@ -260,13 +261,14 @@ def _read_sheet_records(
     *,
     required_headers: tuple[str, ...],
     include_row_metadata: bool = False,
+    cache_ttl: float = 0,
 ) -> list[dict[str, object]]:
     """Read a sheet while tolerating blank or duplicate header cells."""
 
     if sheet is None:
         return []
 
-    rows = sheet.get_all_values(pad_values=True)
+    rows = cached_values(sheet, cache_ttl) if cache_ttl else sheet.get_all_values(pad_values=True)
     if not rows:
         return []
 
@@ -337,6 +339,7 @@ def _read_students_records() -> list[dict[str, object]]:
             "display_name",
         ),
         include_row_metadata=True,
+        cache_ttl=30,
     )
 
 
@@ -456,6 +459,7 @@ def register_line_user(
             column_number,
             incoming_user_id,
         )
+        sheet_reads.invalidate(students_sheet)
 
 
 def ensure_attendance_sheet():
@@ -469,13 +473,15 @@ def _ensure_named_sheet(name: str, headers: list[str]):
     if ensure_sheet_state() is None:
         return None
     workbook = logs_spreadsheet if name in LOG_WORKSHEET_NAMES else spreadsheet
-    try:
-        sheet = workbook.worksheet(name)
-    except WorksheetNotFound:
-        sheet = workbook.add_worksheet(title=name, rows=1000, cols=len(headers))
-    if not any(str(value).strip() for value in sheet.row_values(1)):
-        sheet.append_row(headers, value_input_option="RAW")
-    return sheet
+    def load():
+        try:
+            sheet = workbook.worksheet(name)
+        except WorksheetNotFound:
+            sheet = workbook.add_worksheet(title=name, rows=1000, cols=len(headers))
+        if not any(str(value).strip() for value in sheet.row_values(1)):
+            sheet.append_row(headers, value_input_option="RAW")
+        return sheet
+    return worksheet_handles.get((workbook, name), load, ttl=30, copy=False)
 
 
 def _attendance_header_layout():
@@ -635,6 +641,14 @@ def _new_attendance_record_id() -> str:
     return f"ATT-{uuid4().hex[:16].upper()}"
 
 
+def schedule_attendance_mirror():
+    main_id = os.getenv("GOOGLE_SHEET_ID", "").strip()
+    log_id = os.getenv("GOOGLE_SHEET_LOGS_ID", "").strip()
+    if main_id and log_id and main_id != log_id and spreadsheet is not None:
+        from database.mirror_worker import request_mirror_sync
+        request_mirror_sync()
+
+
 def sync_attendance_mirror():
     """Refresh the existing main Attendance table with raw messages blanked.
 
@@ -678,6 +692,7 @@ def sync_attendance_mirror():
             mirror.batch_update(updates, value_input_option="RAW")
         except Exception as error:
             print("ATTENDANCE MIRROR SYNC ERROR:", type(error).__name__)
+            return False
 
 
 def _attendance_row_values(
@@ -862,7 +877,7 @@ def upsert_attendance_record(
     except Exception:
         _mark_audit_action(action_id, "FAILED", "Attendance write failed.")
         raise
-    sync_attendance_mirror()
+    schedule_attendance_mirror()
     return {
         "action": action,
         "old_status": old_status,
@@ -928,7 +943,7 @@ def delete_attendance_record(
     except Exception:
         _mark_audit_action(action_id, "FAILED", "Attendance delete failed.")
         raise
-    sync_attendance_mirror()
+    schedule_attendance_mirror()
     return {"old_status": old_status, "action_id": action_id}
 
 
@@ -946,7 +961,7 @@ def clear_student_attendance(student_id: str, target_date: date, actor_line_user
     try:
         for record in sorted(records, key=lambda row: int(row["_row_number"]), reverse=True):
             sheet.delete_rows(int(record["_row_number"]))
-        sync_attendance_mirror()
+        schedule_attendance_mirror()
         if not update_monthly_report_cell(student_id, target_date, ""):
             raise RuntimeError("Saved records were cleared, but Monthly Report could not be blanked. Retry the clear before resolving the ticket.")
     except Exception:
@@ -1199,7 +1214,7 @@ def append_attendance_row(values: list[object]) -> str | None:
         values=[ordered_values],
         value_input_option="RAW",
     )
-    sync_attendance_mirror()
+    schedule_attendance_mirror()
     return record_id
 
 
@@ -1215,7 +1230,9 @@ def _get_monthly_report_sheet():
     if ensure_sheet_state() is None:
         return None
     try:
-        return spreadsheet.worksheet(MONTHLY_REPORT_SHEET_NAME)
+        return worksheet_handles.get((spreadsheet, MONTHLY_REPORT_SHEET_NAME),
+                                     lambda: spreadsheet.worksheet(MONTHLY_REPORT_SHEET_NAME),
+                                     ttl=30, copy=False)
     except WorksheetNotFound:
         available = [ws.title for ws in spreadsheet.worksheets()]
         print(
@@ -1396,11 +1413,13 @@ def update_monthly_report_cell(
         # ---------------------------------------------------------------
         sheet_row = student_row_0 + 1
         sheet_col = target_col_0 + 1
+        sheet_reads.invalidate(sheet)
         sheet.update_cell(sheet_row, sheet_col, value)
         print(
             f"MONTHLY REPORT: wrote {value!r} for '{student_id}' "
             f"on {target_date} → sheet row={sheet_row}, col={sheet_col}."
         )
+        sheet_reads.invalidate(sheet)
         return True
 
     except Exception as error:
@@ -1408,13 +1427,15 @@ def update_monthly_report_cell(
         return False
 
 
-def _monthly_report_layout(target_month: date):
+def _monthly_report_layout(target_month: date, *, fresh=False):
     """Read one month block once for both personal and administrator views."""
     sheet = _get_monthly_report_sheet()
     if sheet is None:
         raise RuntimeError("The Monthly Report worksheet is unavailable.")
 
-    rows = sheet.get_all_values(pad_values=True)
+    if fresh:
+        sheet_reads.invalidate(sheet)
+    rows = cached_values(sheet, ttl=5)
     month_text = target_month.strftime("%B %Y").casefold()
     month_header_row = next(
         (
@@ -1474,9 +1495,9 @@ def _entries_for_report_student(rows, day_to_col, student_id_col, student_id, ta
     }
 
 
-def get_monthly_report_entries(student_id: str, target_month: date) -> dict[date, str]:
+def get_monthly_report_entries(student_id: str, target_month: date, *, fresh=False) -> dict[date, str]:
     """Read scheduled dates and cell labels from one monthly report row."""
-    rows, day_to_col, student_id_col = _monthly_report_layout(target_month)
+    rows, day_to_col, student_id_col = _monthly_report_layout(target_month, fresh=fresh)
     return _entries_for_report_student(rows, day_to_col, student_id_col, student_id, target_month)
 
 
@@ -1717,7 +1738,7 @@ def get_user_language(user_id: str) -> str:
     sheet = _ensure_named_sheet("User Settings", LANGUAGE_HEADERS)
     if sheet is None:
         return "en"
-    for row in sheet.get_all_values()[1:]:
+    for row in cached_values(sheet, ttl=30)[1:]:
         if row and row[0] == user_id:
             return row[1] if len(row) > 1 and row[1] in {"en", "zh-TW"} else "en"
     return "en"
@@ -1732,8 +1753,10 @@ def set_user_language(user_id: str, language: str) -> None:
     for index, row in enumerate(sheet.get_all_values()[1:], start=2):
         if row and row[0] == user_id:
             sheet.update_cell(index, 2, language)
+            sheet_reads.invalidate(sheet)
             return
     sheet.append_row([user_id, language], value_input_option="RAW")
+    sheet_reads.invalidate(sheet)
 
 
 TERMS_VERSION = "2026-10-12"

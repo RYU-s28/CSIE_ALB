@@ -1991,3 +1991,162 @@ class AttendanceMirrorTests(TestCase):
              patch.object(db, "spreadsheet", main):
             db.sync_attendance_mirror()
         main.worksheet.assert_not_called()
+
+
+class LatencyReadCacheTests(TestCase):
+    def test_expiration_invalidation_and_snapshot_isolation(self):
+        from database.read_cache import ReadCache
+        cache = ReadCache(max_entries=2)
+        loader = MagicMock(return_value=[["value"]])
+        with patch("database.read_cache.time.monotonic", return_value=100):
+            first = cache.get("sheet", loader, 5)
+            first[0][0] = "mutated"
+            self.assertEqual(cache.get("sheet", loader, 5), [["value"]])
+            loader.assert_called_once()
+        with patch("database.read_cache.time.monotonic", return_value=106):
+            cache.get("sheet", loader, 5)
+            self.assertEqual(loader.call_count, 2)
+            cache.invalidate("sheet")
+            cache.get("sheet", loader, 5)
+            self.assertEqual(loader.call_count, 3)
+        for key in range(4):
+            cache.get(key, loader, 5)
+        self.assertEqual(len(cache._entries), 2)
+
+    def test_language_change_invalidates_preference_snapshot(self):
+        from database import google_sheets as db
+        from database.read_cache import sheet_reads
+        sheet = MagicMock()
+        rows = [["LINE User ID", "Language"], ["U1", "en"]]
+        sheet.get_all_values.side_effect = lambda **kwargs: [row[:] for row in rows]
+        sheet.update_cell.side_effect = lambda row, col, value: rows[row - 1].__setitem__(col - 1, value)
+        with patch.object(db, "_ensure_named_sheet", return_value=sheet):
+            self.assertEqual(db.get_user_language("U1"), "en")
+            self.assertEqual(db.get_user_language("U1"), "en")
+            sheet.get_all_values.assert_called_once()
+            db.set_user_language("U1", "zh-TW")
+            self.assertEqual(db.get_user_language("U1"), "zh-TW")
+        sheet_reads.invalidate(sheet)
+
+    def test_registration_invalidates_cached_roster(self):
+        from database import google_sheets as db
+        from database.read_cache import sheet_reads
+        sheet = MagicMock()
+        rows = [["Student ID", "Name", "LINE User ID", "Active"], ["S1", "Name", "", "TRUE"]]
+        sheet.get_all_values.side_effect = lambda **kwargs: [row[:] for row in rows]
+        sheet.cell.return_value.value = ""
+        sheet.update_cell.side_effect = lambda row, col, value: rows[row - 1].__setitem__(col - 1, value)
+        with patch.object(db, "students_sheet", sheet), patch.object(db, "ensure_sheet_state", return_value=MagicMock()):
+            student = db._read_students_records()[0]
+            db._read_students_records()
+            sheet.get_all_values.assert_called_once()
+            db.register_line_user(student, "U1")
+            self.assertEqual(db._read_students_records()[0]["line_user_id"], "U1")
+        sheet_reads.invalidate(sheet)
+
+
+class FixedBilingualUITests(TestCase):
+    def test_standard_text_translates_without_ai_credentials(self):
+        from bot.language import translate_texts
+        with patch.dict(os.environ, {"GEMINI_API_KEY": ""}), patch("attendance.ai_classifier._generate_json") as ai:
+            result = translate_texts(("My Attendance", "Salary Inquiry", "Change Language", "Sick Leave", "October 2026", "Custom ticket body"), "zh-TW")
+            self.assertEqual(result, ("我的出勤", "薪資查詢", "切換語言", "病假", "2026年10月", "Custom ticket body"))
+            self.assertEqual(translate_texts(("病假", "事假"), "en"), ("Sick Leave", "Personal Leave"))
+            ai.assert_not_called()
+
+    def test_real_localization_preserves_actions_and_identity(self):
+        from bot.language import localize_message
+        class Message:
+            def to_dict(self):
+                return {"type": "flex", "altText": "My Attendance", "contents": {
+                    "type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [
+                        {"type": "box", "layout": "horizontal", "contents": [
+                            {"type": "text", "text": "Student Name"}, {"type": "text", "text": "杜榮瑪"}]},
+                        {"type": "button", "action": {"type": "postback", "label": "Salary Inquiry", "data": "action=richmenu_salary"}}]}}}
+        with patch("database.google_sheets.get_user_language", return_value="zh-TW"), \
+             patch("database.google_sheets.find_student_by_line_user_id", return_value={"student_id": "S06677", "name": "杜榮瑪"}), \
+             patch("linebot.v3.messaging.FlexMessage.from_dict", side_effect=lambda payload: payload, create=True):
+            result = localize_message(Message(), "U1")
+        contents = result["contents"]["body"]["contents"]
+        self.assertEqual(contents[0]["contents"][0]["text"], "學生姓名")
+        self.assertEqual(contents[0]["contents"][1]["text"], "杜榮瑪")
+        self.assertEqual(contents[1]["action"]["label"], "薪資查詢")
+        self.assertEqual(contents[1]["action"]["data"], "action=richmenu_salary")
+
+
+class BackgroundMirrorWorkerTests(TestCase):
+    def test_requests_return_before_sync_and_coalesce_pending_changes(self):
+        from database.mirror_worker import MirrorWorker
+        import threading
+        entered, release, second = threading.Event(), threading.Event(), threading.Event()
+        calls = []
+        def sync():
+            calls.append(1)
+            if len(calls) == 1:
+                entered.set()
+                release.wait(2)
+            else:
+                second.set()
+        worker = MirrorWorker(sync)
+        try:
+            worker.request()
+            self.assertTrue(entered.wait(2))
+            for _ in range(10):
+                worker.request()
+            self.assertFalse(release.is_set())
+            release.set()
+            self.assertTrue(second.wait(2))
+        finally:
+            release.set()
+            worker.close()
+        self.assertEqual(len(calls), 2)
+
+    def test_failed_mirror_is_retried(self):
+        from database.mirror_worker import MirrorWorker
+        import threading
+        done = threading.Event()
+        calls = []
+        def sync():
+            calls.append(1)
+            if len(calls) == 1:
+                return False
+            done.set()
+            return True
+        worker = MirrorWorker(sync, retry_seconds=0.01)
+        try:
+            worker.request()
+            self.assertTrue(done.wait(2))
+        finally:
+            worker.close()
+        self.assertEqual(len(calls), 2)
+
+    def test_attendance_scheduling_never_syncs_inline(self):
+        from database import google_sheets as db
+        with patch.dict(os.environ, {"GOOGLE_SHEET_ID": "main", "GOOGLE_SHEET_LOGS_ID": "logs"}), \
+             patch.object(db, "spreadsheet", MagicMock()), \
+             patch("database.mirror_worker.request_mirror_sync") as request, \
+             patch.object(db, "sync_attendance_mirror") as sync:
+            db.schedule_attendance_mirror()
+        request.assert_called_once()
+        sync.assert_not_called()
+
+
+class MonthlyReportReadCacheTests(TestCase):
+    def test_cached_views_refresh_after_write_and_admin_reads_are_fresh(self):
+        from database import google_sheets as db
+        from database.read_cache import sheet_reads
+        sheet = MagicMock()
+        rows = [["October 2026"], ["ID", "Name", "14", "15", "16", "17", "18"],
+                ["S1", "Name", "病假", "", "", "", ""]]
+        sheet.get_all_values.side_effect = lambda **kwargs: [row[:] for row in rows]
+        sheet.update_cell.side_effect = lambda row, col, value: rows[row - 1].__setitem__(col - 1, value)
+        day = date(2026, 10, 14)
+        with patch.object(db, "_get_monthly_report_sheet", return_value=sheet):
+            self.assertEqual(db.get_monthly_report_entries("S1", day)[day], "病假")
+            self.assertEqual(db.get_monthly_report_entries("S1", day)[day], "病假")
+            sheet.get_all_values.assert_called_once()
+            rows[2][2] = "事假"  # Manual spreadsheet change.
+            self.assertEqual(db.get_monthly_report_entries("S1", day, fresh=True)[day], "事假")
+            self.assertTrue(db.update_monthly_report_cell("S1", day, "出席"))
+            self.assertEqual(db.get_monthly_report_entries("S1", day)[day], "出席")
+        sheet_reads.invalidate(sheet)

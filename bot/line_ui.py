@@ -942,8 +942,8 @@ def welcome_message(
                 },
                 _button("My Attendance", "action=richmenu_attendance", margin="sm"),
                 _button("Salary Inquiry", "action=richmenu_salary", margin="xs"),
+                _button("Terms & Usage", "action=view_terms", margin="xs"),
                 _button("Change Language", "action=language_settings", margin="xs"),
-                _button("Authorize", "action=authorize_account", color=DEDUCTION_RED, margin="md"),
             ],
         },
     }
@@ -955,6 +955,7 @@ def welcome_message(
             items=[
                 QuickReplyItem(action=PostbackAction(label="My Attendance", data="action=richmenu_attendance", display_text="My Attendance")),
                 QuickReplyItem(action=PostbackAction(label="Salary Inquiry", data="action=richmenu_salary", display_text="Salary Inquiry")),
+                QuickReplyItem(action=PostbackAction(label="Terms & Usage", data="action=view_terms", display_text="Terms & Usage")),
                 QuickReplyItem(action=PostbackAction(label="Change Language", data="action=language_settings", display_text="Change Language")),
             ]
         ),
@@ -979,12 +980,12 @@ def initialization_message(
     failure_details = {
         "ambiguous": (
             "More than one active student record matches your LINE name.",
-            "Ask an administrator to correct the duplicate LINE Display Name entries, then tap Authorize again.",
+            "Ask an administrator to correct the duplicate LINE Display Name entries, then message the bot again.",
             "Duplicate Names",
         ),
         "conflict": (
             "The matching student record is already linked to a different LINE account.",
-            "Ask an administrator to check the existing account link. Authorize cannot replace another person's account.",
+            "Ask an administrator to check the existing account link.",
             "Account Conflict",
         ),
         "profile_unavailable": (
@@ -996,7 +997,7 @@ def initialization_message(
     failure_reason, failure_steps, failure_label = failure_details.get(error_status, (
         "Your LINE profile name does not match an active student record.",
         f'Ask an administrator to set LINE Display Name in your Students row to "{display_name or "your current LINE profile name"}". '
-        "Alternatively, change your LINE profile name to match the sheet. Then tap Authorize again. "
+        "Alternatively, change your LINE profile name to match the sheet. Then message the bot again. "
         "Authorization links a matching record; it does not approve a name mismatch.",
         "Name Not Matched",
     ))
@@ -1029,7 +1030,7 @@ def initialization_message(
         ])
     body_contents.extend([
         {"type": "separator", "color": DIVIDER_COLOR, "margin": "md"},
-        {"type": "text", "text": "Review Terms & Usage before continuing. By tapping Authorize, you confirm your identity and agree to the terms and service policy.", "size": "xs", "color": MUTED_TEXT, "wrap": True, "margin": "sm"},
+        {"type": "text", "text": "Review the Terms & Usage for details about this service and how your information is used.", "size": "xs", "color": MUTED_TEXT, "wrap": True, "margin": "sm"},
     ])
     if not is_recognized:
         body_contents.append(_button("Contact Admin / Support", "action=richmenu_help", margin="sm"))
@@ -1038,7 +1039,6 @@ def initialization_message(
         "body": {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "paddingAll": "16px", "contents": body_contents},
         "footer": {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "spacing": "sm", "paddingAll": "16px", "contents": [
             _button("Terms & Usage", "action=view_terms", color=BUTTON_GREEN, margin="none"),
-            _button("Authorize", "action=authorize_account", color=DEDUCTION_RED, margin="none"),
         ]},
     }
     return FlexMessage(
@@ -1073,10 +1073,6 @@ def terms_of_use_message() -> FlexMessage:
                 *[{"type": "text", "text": paragraph, "size": "xs", "color": LABEL_TEXT, "wrap": True, "margin": "md"} for paragraph in page],
             ]},
         }
-        if index == len(pages) - 1:
-            bubble["footer"] = {"type": "box", "layout": "vertical", "backgroundColor": CARD_BG, "contents": [
-                _button("Authorize", "action=authorize_account", color=DEDUCTION_RED, margin="none"),
-            ]}
         bubbles.append(bubble)
     return FlexMessage(alt_text="CSIE Attendance Bot: Terms & Usage", contents=FlexContainer.from_dict({"type": "carousel", "contents": bubbles}))
 
@@ -1155,6 +1151,7 @@ def terms_agreement_confirmed_message(
                 },
                 _button("My Attendance", "action=richmenu_attendance", margin="sm"),
                 _button("Salary Inquiry", "action=richmenu_salary", margin="xs"),
+                _button("Terms & Usage", "action=view_terms", margin="xs"),
                 _button("Change Language", "action=language_settings", margin="xs"),
             ],
         },
@@ -1167,6 +1164,7 @@ def terms_agreement_confirmed_message(
             items=[
                 QuickReplyItem(action=PostbackAction(label="My Attendance", data="action=richmenu_attendance", display_text="My Attendance")),
                 QuickReplyItem(action=PostbackAction(label="Salary Inquiry", data="action=richmenu_salary", display_text="Salary Inquiry")),
+                QuickReplyItem(action=PostbackAction(label="Terms & Usage", data="action=view_terms", display_text="Terms & Usage")),
                 QuickReplyItem(action=PostbackAction(label="Change Language", data="action=language_settings", display_text="Change Language")),
             ]
         ),
@@ -1224,7 +1222,7 @@ def portal_menu_message() -> FlexMessage:
             {"type": "text", "text": "CSIE Student", "weight": "bold", "size": "lg", "color": DARK_GREEN, "wrap": True},
             {"type": "text", "text": "Portal Menu", "size": "sm", "color": MUTED_TEXT, "margin": "xs"},
             *[_button(label, f"action={action}", margin="sm") for label, action in [
-                ("My Attendance", "richmenu_attendance"), ("Salary Inquiry", "richmenu_salary"),
+                ("My Attendance", "richmenu_attendance"), ("Salary Inquiry", "richmenu_salary"), ("Terms & Usage", "view_terms"),
                 ("Change Language", "language_settings"),
             ]],
         ]},

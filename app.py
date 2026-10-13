@@ -914,24 +914,8 @@ def handle_postback(event):
         return
 
     if action in {"authorize_account", "agree_terms"}:
-        if getattr(event.source, "type", "") != "user" or not user_id:
-            reply_to_line(event.reply_token, "Please authorize your account in a private chat with the bot.")
-            return
-        try:
-            # Resolve the sender from LINE, never a student ID supplied in the button.
-            ident = identify_or_register_student(event)
-            student = ident.student
-            if student:
-                save_account_authorization(user_id, str(student["student_id"]).strip())
-                reply_to_line(event.reply_token, terms_agreement_confirmed_message(student))
-            else:
-                reply_to_line(
-                    event.reply_token,
-                    initialization_message(student=None, display_name=ident.display_name, error_status=ident.status),
-                )
-        except Exception as error:
-            print("ACCOUNT AUTHORIZATION ERROR:", type(error).__name__)
-            reply_to_line(event.reply_token, "I couldn't save your account authorization. Please try again or contact an administrator.")
+        # Buttons in older chat cards now open the policy without recording consent.
+        reply_to_line(event.reply_token, terms_of_use_message())
         return
 
     if action == "richmenu_attendance":

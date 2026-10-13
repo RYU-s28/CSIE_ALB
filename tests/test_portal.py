@@ -542,12 +542,12 @@ class TestLanguageSettings(TestCase):
 
 
 class TestAccountAuthorization(TestCase):
-    def test_authorize_button_is_last_for_both_account_states(self):
+    def test_terms_button_is_last_for_both_account_states(self):
         for student in (None, {"student_id": "ST101", "name": "Romel"}):
             card = initialization_message(student)
             button = card.contents.data["footer"]["contents"][-1]
-            self.assertEqual(button["action"]["label"], "Authorize")
-            self.assertEqual(button["action"]["data"], "action=authorize_account")
+            self.assertEqual(button["action"]["label"], "Terms & Usage")
+            self.assertEqual(button["action"]["data"], "action=view_terms")
 
     def test_first_chat_saves_line_id_to_matching_roster_row(self):
         from app import identify_or_register_student
@@ -774,8 +774,8 @@ class TestCompactAuthorizationCard(TestCase):
             buttons = data["footer"]["contents"]
             self.assertEqual(buttons[0]["action"]["label"], "Terms & Usage")
             self.assertEqual(buttons[0]["action"]["data"], "action=view_terms")
-            self.assertEqual(buttons[-1]["action"]["label"], "Authorize")
-            self.assertEqual(buttons[-1]["color"], DEDUCTION_RED)
+            self.assertEqual(len(buttons), 1)
+            self.assertNotIn("authorize_account", json.dumps(data))
             self.assertNotIn("language_settings", json.dumps(data))
             self.assertNotIn("Terms & Usage Notice", json.dumps(data))
             self.assertIsNone(card.quick_reply)
@@ -800,7 +800,7 @@ class TestCompactAuthorizationCard(TestCase):
             self.assertLess(len(json.dumps(bubble).encode()), 30000)
             for item in bubble["body"]["contents"]:
                 self.assertLessEqual(len(item["text"]), 2000)
-        self.assertEqual(bubbles[-1]["footer"]["contents"][-1]["action"]["label"], "Authorize")
+        self.assertNotIn("authorize_account", json.dumps(data))
 
 
 class TestPrivateCardDelivery(TestCase):
@@ -1001,7 +1001,7 @@ class TestAdminPortal(TestCase):
     def test_admin_portal_has_three_shortcuts(self):
         from bot.admin_portal import portal_message
         labels = [item["action"]["label"] for item in portal_message().contents.data["footer"]["contents"]]
-        self.assertEqual(labels, ["My Attendance", "Salary Inquiry", "Change Language"])
+        self.assertEqual(labels, ["My Attendance", "Salary Inquiry", "Terms & Usage", "Change Language"])
 
     def test_every_admin_action_rejects_nonadmin(self):
         from bot.admin_portal import handle_postback
@@ -1224,8 +1224,8 @@ class TestAdminSafeguards(TestCase):
         from bot.line_ui import portal_menu_message
         buttons = [row for row in portal_menu_message().contents.data["body"]["contents"] if row.get("type") == "button"]
         labels = [button["action"]["label"] for button in buttons]
-        self.assertEqual(labels, ["My Attendance", "Salary Inquiry", "Change Language"])
-        self.assertEqual(buttons[2]["action"]["data"], "action=language_settings")
+        self.assertEqual(labels, ["My Attendance", "Salary Inquiry", "Terms & Usage", "Change Language"])
+        self.assertEqual(buttons[3]["action"]["data"], "action=language_settings")
 
     def test_ticket_resolution_note_and_actor_are_stored(self):
         from database.google_sheets import update_ticket

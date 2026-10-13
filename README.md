@@ -8,12 +8,21 @@ Set `GOOGLE_SERVICE_ACCOUNT_JSON` to the service account credentials JSON and
 account's email address, with edit access.
 
 Set `GOOGLE_SHEET_LOGS_ID` to the separate spreadsheet containing `Attendance`,
-`Audit Log`, `Tickets`, and `User Settings`. Share this spreadsheet with the same
-service account with edit access as well. All other tabs stay in `GOOGLE_SHEET_ID`.
+`Tickets`, and `User Settings`. Share this spreadsheet with the same
+service account with edit access as well. `Audit Log` and all other tabs stay in `GOOGLE_SHEET_ID`.
 The legacy `Logs` attendance table also uses the logs spreadsheet. If the logs ID
 is unset, the bot uses the original spreadsheet for all tabs; a configured logs
 spreadsheet that cannot be opened causes initialization to fail rather than
 writing logs into the original file. Restart the bot after changing these IDs.
+
+The existing `Attendance` tab in `GOOGLE_SHEET_ID` is a synchronized copy of the
+logs workbook's attendance records. It refreshes on initialization and attendance
+mutations, including deletions. Raw messages are blanked in the copy; the copy
+may also omit the `raw_message` column entirely. Its existing attendance headers
+must be present, and the bot does not create a replacement tab. Edit attendance
+through the bot or the logs workbook; the main copy is overwritten on refresh.
+If synchronization fails, the primary log remains saved and the server logs
+`ATTENDANCE MIRROR SYNC ERROR`; the next refresh retries the full copy.
 
 The bot writes attendance to the `Attendance` worksheet, with columns
 `student_id`, `name`, `date`, `type`, `status`, `raw_message`, and

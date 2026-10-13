@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import threading
 from datetime import date, datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -74,7 +75,8 @@ TICKET_HEADERS = [
 
 spreadsheet = None
 logs_spreadsheet = None
-LOG_WORKSHEET_NAMES = {"Attendance", "Logs", "Audit Log", "Tickets", "User Settings"}
+LOG_WORKSHEET_NAMES = {"Attendance", "Logs", "Tickets", "User Settings"}
+_attendance_mirror_lock = threading.RLock()
 students_sheet = None
 attendance_sheet = None
 logs_sheet = None
@@ -182,6 +184,7 @@ def ensure_sheet_state():
             value_input_option="RAW",
         )
 
+    sync_attendance_mirror()
     return spreadsheet
 
 
@@ -632,6 +635,51 @@ def _new_attendance_record_id() -> str:
     return f"ATT-{uuid4().hex[:16].upper()}"
 
 
+def sync_attendance_mirror():
+    """Refresh the existing main Attendance table with raw messages blanked.
+
+    The logs workbook remains authoritative. Mirror failure never causes a
+    successful primary write to be retried as a duplicate.
+    """
+    main_id = os.getenv("GOOGLE_SHEET_ID", "").strip()
+    log_id = os.getenv("GOOGLE_SHEET_LOGS_ID", "").strip()
+    if not main_id or not log_id or main_id == log_id or spreadsheet is None:
+        return
+    with _attendance_mirror_lock:
+        try:
+            mirror = spreadsheet.worksheet("Attendance")  # Never create a tab.
+            rows = mirror.get_all_values(pad_values=True)
+            aliases = {"work_id": "student_id", "rawmessage": "raw_message",
+                       "record_id": "attendance_record_id", "attendance_recordid": "attendance_record_id",
+                       "attendanceintent": "attendance_intent"}
+            required = {"student_id", "name", "date", "type", "status"}
+            for header_row, row in enumerate(rows, start=1):
+                columns = {aliases.get(_normalize_header_name(value), _normalize_header_name(value)): index
+                           for index, value in enumerate(row, start=1) if str(value).strip()}
+                if required.issubset(columns):
+                    break
+            else:
+                raise ValueError("Main Attendance tab needs its existing attendance headers.")
+            records = get_attendance_rows()
+            count = max(len(records), len(rows) - header_row)
+            if not count:
+                return
+            fields = required | {"attendance_intent", "attendance_record_id", "raw_message"}
+            updates = []
+            for field in fields & columns.keys():
+                column = _column_letter(columns[field])
+                values = [["" if field == "raw_message" or index >= len(records)
+                           else records[index].get(field, "")] for index in range(count)]
+                updates.append({"range": f"{column}{header_row + 1}:{column}{header_row + count}",
+                                "values": values})
+            end_row = header_row + count
+            if end_row > mirror.row_count:
+                mirror.add_rows(end_row - mirror.row_count)
+            mirror.batch_update(updates, value_input_option="RAW")
+        except Exception as error:
+            print("ATTENDANCE MIRROR SYNC ERROR:", type(error).__name__)
+
+
 def _attendance_row_values(
     columns: dict[str, int],
     values_by_header: dict[str, object],
@@ -814,6 +862,7 @@ def upsert_attendance_record(
     except Exception:
         _mark_audit_action(action_id, "FAILED", "Attendance write failed.")
         raise
+    sync_attendance_mirror()
     return {
         "action": action,
         "old_status": old_status,
@@ -879,6 +928,7 @@ def delete_attendance_record(
     except Exception:
         _mark_audit_action(action_id, "FAILED", "Attendance delete failed.")
         raise
+    sync_attendance_mirror()
     return {"old_status": old_status, "action_id": action_id}
 
 
@@ -896,6 +946,7 @@ def clear_student_attendance(student_id: str, target_date: date, actor_line_user
     try:
         for record in sorted(records, key=lambda row: int(row["_row_number"]), reverse=True):
             sheet.delete_rows(int(record["_row_number"]))
+        sync_attendance_mirror()
         if not update_monthly_report_cell(student_id, target_date, ""):
             raise RuntimeError("Saved records were cleared, but Monthly Report could not be blanked. Retry the clear before resolving the ticket.")
     except Exception:
@@ -1148,6 +1199,7 @@ def append_attendance_row(values: list[object]) -> str | None:
         values=[ordered_values],
         value_input_option="RAW",
     )
+    sync_attendance_mirror()
     return record_id
 
 

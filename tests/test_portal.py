@@ -1873,9 +1873,9 @@ class SeparateLogsWorkbookTests(TestCase):
         from database import google_sheets as db
         main, logs = MagicMock(), MagicMock()
         with patch.multiple(db, spreadsheet=main, logs_spreadsheet=logs):
-            for name in ("Audit Log", "Tickets", "User Settings"):
+            for name in ("Tickets", "User Settings"):
                 self.assertIs(db._ensure_named_sheet(name, ["header"]), logs.worksheet.return_value)
-            for name in ("Account Authorizations", "Morning Reports", "Time Out Drafts", "Time Out Reports"):
+            for name in ("Audit Log", "Account Authorizations", "Morning Reports", "Time Out Drafts", "Time Out Reports"):
                 self.assertIs(db._ensure_named_sheet(name, ["header"]), main.worksheet.return_value)
 
     def test_unavailable_logs_workbook_does_not_fall_back(self):
@@ -1946,3 +1946,48 @@ class ExamAndPendingReportTests(TestCase):
         self.assertEqual(report.count("不出來："), 1)
         self.assertNotIn("待確認", report)
         self.assertIn("實到人數：1", report)
+
+
+class AttendanceMirrorTests(TestCase):
+    def test_existing_copy_blanks_raw_messages_and_removed_records(self):
+        from database import google_sheets as db
+        main, mirror = MagicMock(), MagicMock()
+        main.worksheet.return_value = mirror
+        mirror.row_count = 100
+        mirror.get_all_values.return_value = [
+            ["student_id", "name", "date", "type", "status", "raw_message", "attendance_record_id"],
+            ["S1", "Name", "2026-10-14", "事假", "Confirmed", "old private text", "ID1"],
+            ["S2", "Other", "2026-10-14", "病假", "Confirmed", "other private text", "ID2"],
+        ]
+        records = [{"student_id": "S1", "name": "Name", "date": "2026-10-14", "type": "事假",
+                    "status": "Confirmed", "raw_message": "new private text", "attendance_record_id": "ID1"}]
+        with patch.dict(os.environ, {"GOOGLE_SHEET_ID": "main", "GOOGLE_SHEET_LOGS_ID": "logs"}), \
+             patch.object(db, "spreadsheet", main), patch.object(db, "get_attendance_rows", return_value=records):
+            db.sync_attendance_mirror()
+        changes = {item["range"]: item["values"] for item in mirror.batch_update.call_args.args[0]}
+        self.assertEqual(changes["F2:F3"], [[""], [""]])
+        self.assertEqual(changes["A2:A3"], [["S1"], [""]])
+        self.assertEqual(changes["G2:G3"], [["ID1"], [""]])
+        self.assertNotIn("private text", str(changes))
+        main.add_worksheet.assert_not_called()
+
+    def test_mirror_can_omit_raw_message_column(self):
+        from database import google_sheets as db
+        main, mirror = MagicMock(), MagicMock()
+        main.worksheet.return_value = mirror
+        mirror.row_count = 100
+        mirror.get_all_values.return_value = [["Work ID", "name", "date", "type", "status"]]
+        with patch.dict(os.environ, {"GOOGLE_SHEET_ID": "main", "GOOGLE_SHEET_LOGS_ID": "logs"}), \
+             patch.object(db, "spreadsheet", main), \
+             patch.object(db, "get_attendance_rows", return_value=[{"student_id": "S1", "raw_message": "secret"}]):
+            db.sync_attendance_mirror()
+        self.assertEqual(len(mirror.batch_update.call_args.args[0]), 5)
+        self.assertNotIn("secret", str(mirror.batch_update.call_args))
+
+    def test_same_workbook_never_scrubs_authoritative_messages(self):
+        from database import google_sheets as db
+        main = MagicMock()
+        with patch.dict(os.environ, {"GOOGLE_SHEET_ID": "same", "GOOGLE_SHEET_LOGS_ID": "same"}), \
+             patch.object(db, "spreadsheet", main):
+            db.sync_attendance_mirror()
+        main.worksheet.assert_not_called()

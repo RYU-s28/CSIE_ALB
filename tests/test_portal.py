@@ -1003,7 +1003,7 @@ class TestAdminPortal(TestCase):
     def test_admin_portal_has_three_shortcuts(self):
         from bot.admin_portal import portal_message
         labels = [item["action"]["label"] for item in portal_message().contents.data["footer"]["contents"]]
-        self.assertEqual(labels, ["My Attendance", "Salary Inquiry", "Terms & Usage", "Change Language"])
+        self.assertEqual(labels, ["My Attendance", "Salary Inquiry", "Change Language"])
 
     def test_every_admin_action_rejects_nonadmin(self):
         from bot.admin_portal import handle_postback
@@ -1226,8 +1226,8 @@ class TestAdminSafeguards(TestCase):
         from bot.line_ui import portal_menu_message
         buttons = [row for row in portal_menu_message().contents.data["body"]["contents"] if row.get("type") == "button"]
         labels = [button["action"]["label"] for button in buttons]
-        self.assertEqual(labels, ["My Attendance", "Salary Inquiry", "Terms & Usage", "Change Language"])
-        self.assertEqual(buttons[3]["action"]["data"], "action=language_settings")
+        self.assertEqual(labels, ["My Attendance", "Salary Inquiry", "Change Language"])
+        self.assertEqual(buttons[2]["action"]["data"], "action=language_settings")
 
     def test_ticket_resolution_note_and_actor_are_stored(self):
         from database.google_sheets import update_ticket

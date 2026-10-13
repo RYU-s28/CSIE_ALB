@@ -62,7 +62,6 @@ def portal_message():
     return card("Admin Portal", [paragraph("Manage student requests and attendance privately in LINE.")], [
         _button("My Attendance", "action=richmenu_attendance", margin="none"),
         _button("Salary Inquiry", "action=richmenu_salary", margin="none"),
-        _button("Terms & Usage", "action=view_terms", margin="none"),
         _button("Change Language", "action=language_settings", margin="none"),
     ], subtitle="Administrator workspace")
 

@@ -942,7 +942,6 @@ def welcome_message(
                 },
                 _button("My Attendance", "action=richmenu_attendance", margin="sm"),
                 _button("Salary Inquiry", "action=richmenu_salary", margin="xs"),
-                _button("Terms & Usage", "action=view_terms", margin="xs"),
                 _button("Change Language", "action=language_settings", margin="xs"),
             ],
         },
@@ -955,7 +954,6 @@ def welcome_message(
             items=[
                 QuickReplyItem(action=PostbackAction(label="My Attendance", data="action=richmenu_attendance", display_text="My Attendance")),
                 QuickReplyItem(action=PostbackAction(label="Salary Inquiry", data="action=richmenu_salary", display_text="Salary Inquiry")),
-                QuickReplyItem(action=PostbackAction(label="Terms & Usage", data="action=view_terms", display_text="Terms & Usage")),
                 QuickReplyItem(action=PostbackAction(label="Change Language", data="action=language_settings", display_text="Change Language")),
             ]
         ),
@@ -1152,7 +1150,6 @@ def terms_agreement_confirmed_message(
                 },
                 _button("My Attendance", "action=richmenu_attendance", margin="sm"),
                 _button("Salary Inquiry", "action=richmenu_salary", margin="xs"),
-                _button("Terms & Usage", "action=view_terms", margin="xs"),
                 _button("Change Language", "action=language_settings", margin="xs"),
             ],
         },
@@ -1165,7 +1162,6 @@ def terms_agreement_confirmed_message(
             items=[
                 QuickReplyItem(action=PostbackAction(label="My Attendance", data="action=richmenu_attendance", display_text="My Attendance")),
                 QuickReplyItem(action=PostbackAction(label="Salary Inquiry", data="action=richmenu_salary", display_text="Salary Inquiry")),
-                QuickReplyItem(action=PostbackAction(label="Terms & Usage", data="action=view_terms", display_text="Terms & Usage")),
                 QuickReplyItem(action=PostbackAction(label="Change Language", data="action=language_settings", display_text="Change Language")),
             ]
         ),
@@ -1223,7 +1219,7 @@ def portal_menu_message() -> FlexMessage:
             {"type": "text", "text": "CSIE Student", "weight": "bold", "size": "lg", "color": DARK_GREEN, "wrap": True},
             {"type": "text", "text": "Portal Menu", "size": "sm", "color": MUTED_TEXT, "margin": "xs"},
             *[_button(label, f"action={action}", margin="sm") for label, action in [
-                ("My Attendance", "richmenu_attendance"), ("Salary Inquiry", "richmenu_salary"), ("Terms & Usage", "view_terms"),
+                ("My Attendance", "richmenu_attendance"), ("Salary Inquiry", "richmenu_salary"),
                 ("Change Language", "language_settings"),
             ]],
         ]},

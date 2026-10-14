@@ -404,3 +404,12 @@ names and abbreviations resolve to the upcoming occurrence, including today;
 "next Wednesday" on Wednesday means one week later, and "next week Wednesday"
 uses the following calendar week. Chinese weekday phrases are also supported.
 Dates are anchored to the original LINE message timestamp in Asia/Taipei.
+
+
+Daily report generation (07:00, `/report`/`/summary`, and private View Daily Report)
+reads the selected day's Monthly Report cells freshly, with no attendance-log
+fallback. A blank or cleared cell means no leave in the official report. `特休`
+is paid attendance; `待確認` is reported under `不出來`. Missing student rows,
+missing date columns, or unsupported statuses prevent generating a misleading
+report. New morning snapshots use the same grid source; existing issued morning
+snapshots stay frozen for the Time Out Report.

@@ -291,6 +291,9 @@ def send_group_translation(reply_token, chunks, quote_token=None):
 
 def send_report_to_group(report: DailyReportText) -> bool:
     """Post only official plain-text reports to the configured report group."""
+    if not isinstance(report, str) or not report.strip() or report.strip().lower() in {"none", "null"}:
+        print("GROUP REPORT SKIPPED: invalid or empty report.")
+        return False
     group_id = os.getenv("LINE_REPORT_GROUP_ID", "").strip()
     if not group_id.startswith("C"):
         print("GROUP REPORT SKIPPED: LINE_REPORT_GROUP_ID is missing or is not a group ID.")
@@ -298,7 +301,7 @@ def send_report_to_group(report: DailyReportText) -> bool:
     try:
         with ApiClient(configuration) as client:
             api = MessagingApi(client)
-            text = str(report)
+            text = report
             chunks = [text[index:index + 4900] for index in range(0, len(text), 4900)] or [text]
             for start in range(0, len(chunks), 5):
                 api.push_message(push_message_request=PushMessageRequest(

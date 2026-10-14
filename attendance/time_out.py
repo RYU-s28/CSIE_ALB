@@ -62,15 +62,9 @@ def capture_current_morning(day):
     existing = get_morning(day)
     if existing:
         return existing
-    from attendance.leave_message import LEAVE_TYPE_LABELS
+    from attendance.report import records_from_monthly_report
     students, expected = db.get_report_students()
-    statuses = {value: key for key, value in LEAVE_TYPE_LABELS.items()}
-    latest = {row["student_id"]: row for row in db.get_attendance_rows(day)}
-    records = [AttendanceRecord(
-        student_id=sid, status=statuses.get(row.get("type"), "unknown"),
-        attendance_date=day, message=row.get("raw_message", ""),
-        attendance_intent=str(row.get("attendance_intent", "")).lower() in {"true", "1", "yes"},
-    ) for sid, row in latest.items() if sid in students]
+    records = records_from_monthly_report(day, students)
     report = build_report(report_date=day, total_students=expected, expected_students=expected, students=students, records=records)
     return save_morning(day, report, records, students, expected)
 

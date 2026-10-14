@@ -1528,10 +1528,11 @@ def get_monthly_report_entries(student_id: str, target_month: date, *, fresh=Fal
     return _entries_for_report_student(rows, day_to_col, student_id_col, student_id, target_month)
 
 
-def get_daily_monthly_report(target_date: date) -> list[dict[str, str]]:
+def get_daily_monthly_report(target_date: date, *, fresh=False, students=None) -> list[dict[str, str]]:
     """Read each active student's daily status from the authoritative grid."""
-    students, _ = get_report_students()
-    rows, columns, id_col = _monthly_report_layout(target_date)
+    if students is None:
+        students, _ = get_report_students()
+    rows, columns, id_col = _monthly_report_layout(target_date, fresh=fresh)
     statuses = []
     for student_id, student in students.items():
         try:

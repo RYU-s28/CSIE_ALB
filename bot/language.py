@@ -49,7 +49,7 @@ def localize_message(message, user_id=None):
         payload = {"text": message} if isinstance(message, str) else message.to_dict()
         # Unmatched accounts have no roster record. Protect identity values
         # from the original card before collecting any text for translation.
-        identity_labels = {"LINE Name", "Student Name", "Student ID", "LINE User ID", "Full Name", "Chinese Name"}
+        identity_labels = {"Name", "ID no.", "LINE Name", "Student Name", "Student ID", "LINE User ID", "Full Name", "Chinese Name"}
         def protect_card_identities(node):
             if isinstance(node, dict):
                 button_action = node.get("action", {})

@@ -7,6 +7,7 @@ ZH_TW = {
     "Attendance Status": "出勤狀態", "Time Out Report": "下班回校報告", "Help Center": "幫助中心",
     "Help Center · Tickets": "幫助中心・服務單", "Leave History": "請假紀錄", "Leave Request": "請假申請",
     "Terms & Usage": "條款與使用規範", "Start Using": "開始使用", "Welcome to CSIE Attendance Bot.": "歡迎使用 CSIE 出勤機器人。",
+    "Name": "姓名", "ID no.": "編號",
     "Student Name": "學生姓名", "Student ID": "學生編號", "LINE Name": "LINE 名稱", "LINE User ID": "LINE 使用者 ID",
     "Full Name": "全名", "Chinese Name": "中文姓名", "Account Link": "帳號連結", "Status": "狀態", "Date": "日期",
     "Day": "日期類型", "Students": "學生人數", "Present / Paid Leave": "出席／有薪假", "Annual Leave · Paid": "特休・有薪",

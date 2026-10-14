@@ -8,11 +8,8 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.background import BackgroundScheduler
 
 
-from attendance.attendance import AttendanceRecord
-from attendance.leave_message import LEAVE_TYPE_LABELS
-from attendance.report import build_report
+from attendance.report import build_report, records_from_monthly_report
 from database.google_sheets import (
-    get_attendance_rows,
     get_report_students,
     mark_present_in_monthly_report,
 )
@@ -22,38 +19,22 @@ from scheduler.work_calendar import is_workday
 TAIPEI = ZoneInfo("Asia/Taipei")
 scheduler = BackgroundScheduler(timezone=TAIPEI)
 
-SHEET_STATUS_TO_INTERNAL = {
-    value: key for key, value in LEAVE_TYPE_LABELS.items()
-}
-SHEET_STATUS_TO_INTERNAL["遲到"] = "late"
-SHEET_STATUS_TO_INTERNAL["待確認"] = "unknown"
-
-
 def generate_daily_report(report_date: date | None = None) -> str:
-    """Build a detailed report using persisted attendance and roster data."""
+    """Build a detailed report using fresh Monthly Report cells and the active roster."""
 
     target_date = report_date or datetime.now(TAIPEI).date()
     students, expected_count = get_report_students()
-    latest_by_student = {}
-    for row in get_attendance_rows(target_date):
-        latest_by_student[row["student_id"]] = row
-    records = [
-        AttendanceRecord(
-            student_id=row["student_id"],
-            status=SHEET_STATUS_TO_INTERNAL.get(row.get("type", ""), "unknown"),
-            message=row.get("raw_message", ""),
-            attendance_date=target_date,
-            attendance_intent=row.get("attendance_intent", "").strip().lower()
-            in {"true", "1", "yes"},
-        )
-        for row in latest_by_student.values()
-    ]
+    records = records_from_monthly_report(target_date, students)
     report = build_report(
         report_date=target_date,
         total_students=expected_count,
         records=records,
         students=students,
+        expected_students=expected_count,
     )
+    from attendance.time_out import save_morning
+    save_morning(target_date, report, records, students, expected_count)
+    return report
 
 
 def daily_attendance_job() -> None:
@@ -65,6 +46,8 @@ def daily_attendance_job() -> None:
     from app import send_report_to_group
     try:
         report = generate_daily_report(today)
+        if not isinstance(report, str) or not report.strip():
+            raise ValueError("Daily report generation returned no report.")
         if send_report_to_group(report):
             print(f"{today}: Morning attendance report sent to the configured group.")
         else:

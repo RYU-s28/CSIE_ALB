@@ -2528,3 +2528,127 @@ class ConcurrentCacheTests(TestCase):
             return "old"
         self.assertEqual(cache.get("sheet", raced_read, 30), "old")
         self.assertEqual(cache.get("sheet", lambda: "new", 30), "new")
+
+
+class ScheduledMorningReportRegressionTests(TestCase):
+    def setUp(self):
+        import importlib
+        with patch.dict(sys.modules, {"apscheduler": MagicMock(), "apscheduler.schedulers": MagicMock(), "apscheduler.schedulers.background": MagicMock()}):
+            self.jobs = importlib.import_module("scheduler.daily_report")
+
+    def test_generator_returns_actual_report_and_saves_matching_morning(self):
+        jobs = self.jobs
+        from attendance.report import DailyReportText, StudentDisplay
+        day = date(2026, 10, 14)
+        students = {"S1": StudentDisplay("S1", "Name"), "S2": StudentDisplay("S2", "Other")}
+        rows = [{"student_id": "S1", "type": "事假", "attendance_intent": "TRUE"}]
+        with patch.object(jobs, "get_report_students", return_value=(students, 2)), \
+             patch("database.google_sheets.get_daily_monthly_report", return_value=rows), \
+             patch("attendance.time_out.save_morning") as save:
+            report = jobs.generate_daily_report(day)
+        self.assertIsInstance(report, DailyReportText)
+        self.assertIn("2026/10/14", report)
+        self.assertIn("應到人數：2", report)
+        self.assertIn("實到人數：1", report)
+        self.assertIn("事假：1人\n@Name", report)
+        save.assert_called_once()
+        saved_day, saved_report, records, roster, expected = save.call_args.args
+        self.assertEqual(saved_day, day)
+        self.assertEqual(saved_report, report)
+        self.assertEqual(records[0].status, "personal_leave")
+        self.assertEqual(roster, students)
+        self.assertEqual(expected, 2)
+
+    def test_scheduled_job_sends_generator_output_not_none(self):
+        jobs = self.jobs
+        from attendance.report import StudentDisplay
+        day = date(2026, 10, 14)
+        students = {"S1": StudentDisplay("S1", "Name")}
+        with patch.object(jobs, "datetime") as clock, \
+             patch.object(jobs, "is_workday", return_value=True), \
+             patch.object(jobs, "get_report_students", return_value=(students, 1)), \
+             patch("database.google_sheets.get_daily_monthly_report", return_value=[]), \
+             patch("attendance.time_out.save_morning"), \
+             patch("app.send_report_to_group", return_value=True) as send:
+            clock.now.return_value.date.return_value = day
+            jobs.daily_attendance_job()
+        report = send.call_args.args[0]
+        self.assertIn("應到人數：1", report)
+        self.assertIn("實到人數：1", report)
+
+    def test_invalid_generation_is_not_sent(self):
+        jobs = self.jobs
+        with patch.object(jobs, "is_workday", return_value=True), \
+             patch.object(jobs, "generate_daily_report", return_value=None), \
+             patch("app.send_report_to_group") as send:
+            jobs.daily_attendance_job()
+        send.assert_not_called()
+
+    def test_group_delivery_rejects_missing_or_placeholder_reports(self):
+        from app import send_report_to_group
+        with patch.dict(os.environ, {"LINE_REPORT_GROUP_ID": "Cgroup"}), patch("app.ApiClient") as api:
+            for report in (None, "", "  ", "None", "null"):
+                self.assertFalse(send_report_to_group(report))
+        api.assert_not_called()
+
+
+class MonthlyReportAsDailySourceTests(TestCase):
+    def setUp(self):
+        from attendance.report import StudentDisplay
+        self.day = date(2026, 10, 14)
+        self.students = {sid: StudentDisplay(sid, sid) for sid in ("S1", "S2", "S3", "S4")}
+        self.rows = [{"student_id": "S1", "type": ""}, {"student_id": "S2", "type": "病假"},
+                     {"student_id": "S3", "type": "特休"}, {"student_id": "S4", "type": "待確認"}]
+
+    def test_cleared_grid_overrides_old_leave_log_and_pending_counts_absent(self):
+        from attendance.report import records_from_monthly_report, build_report
+        with patch("database.google_sheets.get_daily_monthly_report", return_value=self.rows) as grid, \
+             patch("database.google_sheets.get_attendance_rows", side_effect=AssertionError("Logs must not be read")):
+            records = records_from_monthly_report(self.day, self.students)
+        grid.assert_called_once_with(self.day, fresh=True, students=self.students)
+        self.assertNotIn("S1", [record.student_id for record in records])
+        report = build_report(report_date=self.day, total_students=4, students=self.students, records=records)
+        self.assertIn("應到人數：4", report)
+        self.assertIn("實到人數：2", report)
+        self.assertIn("病假：1人\n@S2", report)
+        self.assertIn("特休：1人\n@S3", report)
+        self.assertIn("不出來：1人\n@S4", report)
+
+    def test_command_and_preview_use_grid_not_logs(self):
+        from bot.commands import _report_data
+        from bot.admin_portal import daily_report_message
+        with patch("database.google_sheets.get_report_students", return_value=(self.students, 4)), \
+             patch("database.google_sheets.get_daily_monthly_report", return_value=self.rows), \
+             patch("database.google_sheets.get_attendance_rows", side_effect=AssertionError("Logs must not be read")), \
+             patch("attendance.time_out.save_morning"):
+            issued = _report_data(self.day, summary=False)
+            preview = daily_report_message(self.day)
+        self.assertEqual(str(issued), str(preview))
+        self.assertIn("實到人數：2", preview)
+
+    def test_missing_snapshot_capture_uses_grid(self):
+        from attendance.time_out import capture_current_morning
+        with patch("attendance.time_out.get_morning", return_value=None), \
+             patch("database.google_sheets.get_report_students", return_value=(self.students, 4)), \
+             patch("database.google_sheets.get_daily_monthly_report", return_value=self.rows), \
+             patch("database.google_sheets.get_attendance_rows", side_effect=AssertionError("Logs must not be read")), \
+             patch("attendance.time_out.save_morning", return_value="snapshot") as save:
+            self.assertEqual(capture_current_morning(self.day), "snapshot")
+        self.assertIn("實到人數：2", save.call_args.args[1])
+        self.assertNotIn("S1", [record.student_id for record in save.call_args.args[2]])
+
+    def test_missing_date_row_and_unknown_status_never_fall_back_to_logs(self):
+        from attendance.report import records_from_monthly_report
+        for value in ("Rest Day", "Missing Report Row", "unexpected status"):
+            with self.subTest(value=value), \
+                 patch("database.google_sheets.get_daily_monthly_report", return_value=[{"student_id": "S1", "type": value}]), \
+                 patch("database.google_sheets.get_attendance_rows") as logs:
+                with self.assertRaises(ValueError):
+                    records_from_monthly_report(self.day, self.students)
+                logs.assert_not_called()
+
+    def test_exam_cell_is_personal_leave(self):
+        from attendance.report import records_from_monthly_report
+        with patch("database.google_sheets.get_daily_monthly_report", return_value=[{"student_id": "S1", "type": "考試"}]):
+            records = records_from_monthly_report(self.day, self.students)
+        self.assertEqual(records[0].status, "personal_leave")

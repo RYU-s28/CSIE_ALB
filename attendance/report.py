@@ -127,3 +127,32 @@ def build_report(
                 lines.append(f"@{record.student_id}")
 
     return DailyReportText("\n".join(lines))
+
+
+def records_from_monthly_report(report_date: date, students=None) -> list[AttendanceRecord]:
+    """Use a fresh day's grid cells exclusively; blank cells mean no leave.
+
+    A missing row/date or unknown cell is an error, never a fallback to logs.
+    """
+    from database.google_sheets import get_daily_monthly_report
+    from attendance.leave_message import LEAVE_TYPE_LABELS
+    statuses = {label.casefold(): status for status, label in LEAVE_TYPE_LABELS.items()}
+    statuses.update({
+        "考試": "personal_leave", "exam": "personal_leave", "sick leave": "sick_leave",
+        "personal leave": "personal_leave", "menstrual leave": "menstrual_leave",
+        "annual leave": "special_leave", "half day": "half_day", "present": "present",
+        "late": "late", "pending": "unknown", "pending review": "unknown", "absent": "not_coming",
+    })
+    records = []
+    for row in get_daily_monthly_report(report_date, fresh=True, students=students):
+        value = str(row.get("type", "")).strip()
+        if value in {"Rest Day", "Missing Report Row"}:
+            raise ValueError(f"Monthly Report is missing the scheduled date or student row: {row['student_id']} ({report_date}).")
+        if not value:
+            continue  # A cleared leave cell must not resurrect an old log entry.
+        status = statuses.get(value.casefold())
+        if status is None:
+            raise ValueError(f"Unsupported Monthly Report status for {row['student_id']}: {value}")
+        records.append(AttendanceRecord(student_id=row["student_id"], status=status,
+                                        attendance_date=report_date, attendance_intent=status == "unknown"))
+    return records

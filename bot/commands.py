@@ -140,26 +140,8 @@ def is_admin_user(user_id: str | None) -> bool:
 
 
 def _records_for_date(target_date: date) -> list[AttendanceRecord]:
-    latest_by_student = {}
-    for row in google_sheets.get_attendance_rows(target_date):
-        latest_by_student[row["student_id"]] = row
-    records = []
-    for row in latest_by_student.values():
-        internal_status = SHEET_STATUS_TO_INTERNAL.get(
-            row.get("type", ""),
-            "unknown",
-        )
-        records.append(
-            AttendanceRecord(
-                student_id=row["student_id"],
-                status=internal_status,
-                message=row.get("raw_message", ""),
-                attendance_date=target_date,
-                attendance_intent=row.get("attendance_intent", "").strip().lower()
-                in {"true", "1", "yes"},
-            )
-        )
-    return records
+    from attendance.report import records_from_monthly_report
+    return records_from_monthly_report(target_date)
 
 
 def _report_data(target_date: date, *, summary: bool) -> str:

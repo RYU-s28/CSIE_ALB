@@ -1015,8 +1015,8 @@ def initialization_message(
     ]
     if is_recognized:
         body_contents.extend([
-            _stat_row("Student Name", student_name, margin="md"),
-            _stat_row("Student ID", student_id, margin="xs"),
+            _stat_row("Name", student_name, margin="md"),
+            _stat_row("ID no.", student_id, margin="xs"),
             _stat_row("LINE Name", display_name or student_name, margin="xs"),
         ])
     else:

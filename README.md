@@ -77,7 +77,14 @@ accounts can use administrative commands.
 Set `LINE_REPORT_GROUP_ID` to the `C...` LINE group ID for official reports.
 The app posts the morning report there at 7:00 Asia/Taipei on accepted workdays.
 Issued `/report` and `/summary` reports and confirmed Time Out Reports also post
-there as plain text. The bot must be a member of that group.
+there as plain text. The bot must be a member of that group. Use the
+`source.groupId` from a webhook received by this bot (`C` plus 32 hexadecimal
+characters). Delivery failures now distinguish invalid credentials, group or
+message rejection, and message quota/rate limits. Server logs include LINE
+status, response body, request ID, and the number of completed batches. If a
+report was partially delivered, retrying may duplicate the earlier parts.
+A monthly quota failure requires increasing the LINE messaging plan or waiting
+for its reset; changing the group ID does not resolve it.
 
 All bot commands start with `/` to distinguish them from ordinary chat.
 Students can use `/hello`, `/statusme [date]`, `/clear [date]`,

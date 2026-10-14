@@ -46,6 +46,7 @@ from bot.event_dispatch import webhook_dispatcher
 from bot.group_translation import group_translations
 from bot.rate_limit import rate_limited
 from bot.delivery import destination, private_responses
+from bot.report_delivery import report_failure, send_report
 from bot import admin_portal
 from attendance.leave_message import validate_leave_workday, parse_leave_template
 from bot.line_ui import language_settings_message, terms_of_use_message, response_card_message, portal_menu_message
@@ -216,7 +217,7 @@ def reply_to_line(reply_token: str, message: str | FlexMessage):
         return False
     if isinstance(message, GroupReportText):
         sent = send_report_to_group(message)
-        message = "Report sent to the configured group chat." if sent else "The report was prepared, but could not be sent to the group. Check LINE_REPORT_GROUP_ID and the bot's group access, then retry."
+        message = "Report sent to the configured group chat." if sent else "The report was prepared, but could not be sent to the group. " + report_failure.get()
     if not target.private:
         # Group/room tokens would post publicly; push only to the sender.
         return push_to_line(target.user_id, message) if target.user_id else False
@@ -291,26 +292,7 @@ def send_group_translation(reply_token, chunks, quote_token=None):
 
 def send_report_to_group(report: DailyReportText) -> bool:
     """Post only official plain-text reports to the configured report group."""
-    if not isinstance(report, str) or not report.strip() or report.strip().lower() in {"none", "null"}:
-        print("GROUP REPORT SKIPPED: invalid or empty report.")
-        return False
-    group_id = os.getenv("LINE_REPORT_GROUP_ID", "").strip()
-    if not group_id.startswith("C"):
-        print("GROUP REPORT SKIPPED: LINE_REPORT_GROUP_ID is missing or is not a group ID.")
-        return False
-    try:
-        with ApiClient(configuration) as client:
-            api = MessagingApi(client)
-            text = report
-            chunks = [text[index:index + 4900] for index in range(0, len(text), 4900)] or [text]
-            for start in range(0, len(chunks), 5):
-                api.push_message(push_message_request=PushMessageRequest(
-                    to=group_id, messages=[TextMessage(text=chunk) for chunk in chunks[start:start + 5]],
-                ))
-        return True
-    except Exception as error:
-        print("GROUP REPORT SEND ERROR:", type(error).__name__)
-        return False
+    return send_report(configuration, os.getenv("LINE_REPORT_GROUP_ID", "").strip(), report)
 
 
 def get_line_display_name(

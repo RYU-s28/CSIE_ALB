@@ -38,22 +38,8 @@ def generate_daily_report(report_date: date | None = None) -> str:
 
 
 def daily_attendance_job() -> None:
-    today = datetime.now(TAIPEI).date()
-    if not is_workday(today):
-        print(f"{today}: No work scheduled. Attendance report skipped.")
-        return
-
-    from app import send_report_to_group
-    try:
-        report = generate_daily_report(today)
-        if not isinstance(report, str) or not report.strip():
-            raise ValueError("Daily report generation returned no report.")
-        if send_report_to_group(report):
-            print(f"{today}: Morning attendance report sent to the configured group.")
-        else:
-            print(f"{today}: Morning attendance report was not delivered to the group.")
-    except Exception as error:
-        print("DAILY ATTENDANCE REPORT ERROR:", type(error).__name__)
+    """Legacy entrypoint: reports now require an explicit group keyword."""
+    print("Automatic report delivery disabled. Send 上班點名 in the report group.")
 
 
 def mark_present_job() -> None:
@@ -69,14 +55,6 @@ def mark_present_job() -> None:
 def start_scheduler() -> None:
     if scheduler.running:
         return
-    scheduler.add_job(
-        daily_attendance_job,
-        trigger="cron",
-        hour=7,
-        minute=0,
-        id="daily_attendance_report",
-        replace_existing=True,
-    )
     scheduler.add_job(
         mark_present_job,
         trigger="cron",

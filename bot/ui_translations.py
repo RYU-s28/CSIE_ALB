@@ -2,6 +2,8 @@
 import re
 
 ZH_TW = {
+    "Preview Return Report": "預覽回校報告",
+    "Send 下班點名 in the report group to post this report.": "在報告群組傳送「下班點名」以發布此報告。",
     "My Attendance": "我的出勤", "Salary Inquiry": "薪資查詢", "Change Language": "切換語言",
     "Portal Menu": "功能選單", "Admin Portal": "管理員選單", "Administrator workspace": "管理員工作區",
     "Attendance Status": "出勤狀態", "Time Out Report": "下班回校報告", "Help Center": "幫助中心",

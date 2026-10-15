@@ -21,9 +21,10 @@ def timeout_message(day):
         _stat_row("No Bus", str(len(state["no_bus"])), margin="xs"),
         _stat_row("Expected School Return", str(state["expected_return"]), margin="xs"),
         _stat_row("Confirmed Returned", str(returned) if returned is not None else "Not Sent", margin="xs"),
+        paragraph("Send 下班點名 in the report group to post this report."),
     ], [
         _button("Choose Who Won't Take Bus", action("admin_timeout_bus", date=day), margin="none"),
-        _button("Send to Group", action("admin_timeout_send", date=day), margin="none"),
+        _button("Preview Return Report", action("admin_timeout_send", date=day), margin="none"),
     ], subtitle=day.isoformat())
 
 
@@ -59,7 +60,7 @@ def send_message(day, actor, returned=None):
     if state is None:
         return timeout_message(day)
     returned = state["expected_return"] if returned is None else returned
-    return GroupReportText(time_out.confirm_return(day, returned, actor, state["fingerprint"]))
+    return GroupReportText(time_out.compose_report(state, returned))
 
 
 def handle_time_out(data, actor, day):

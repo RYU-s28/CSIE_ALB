@@ -1,4 +1,4 @@
-"""Keep event source context so group replies can never use a public token."""
+"""Keep source context: ordinary details stay private; explicit reports may reply publicly."""
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import wraps
@@ -8,6 +8,7 @@ from functools import wraps
 class ReplyDestination:
     user_id: str | None
     private: bool
+    group_id: str | None = None
 
 
 destination = ContextVar("reply_destination", default=None)
@@ -19,6 +20,7 @@ def private_responses(function):
         source = event.source
         token = destination.set(ReplyDestination(
             getattr(source, "user_id", None), getattr(source, "type", "") == "user",
+            getattr(source, "group_id", None),
         ))
         try:
             return function(event)

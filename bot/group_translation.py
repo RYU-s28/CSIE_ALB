@@ -47,6 +47,9 @@ def translation_job(event):
     reply_token = getattr(event, "reply_token", None)
     if not isinstance(text, str) or not text.strip() or not isinstance(reply_token, str) or not reply_token:
         return None
+    from bot.report_keywords import REPORT_KEYWORDS
+    if text.strip() in REPORT_KEYWORDS:
+        return None
     if text.lstrip().startswith("/") or re.match(r"\s*edit(?:\s|$)", text, re.IGNORECASE):
         return None
     mention = getattr(event.message, "mention", None)

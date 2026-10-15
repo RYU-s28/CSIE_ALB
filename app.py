@@ -43,10 +43,10 @@ from attendance.leave_message import (
 from attendance.salary import calculate_salary
 from bot.language import localize_message, private_language_context
 from bot.event_dispatch import webhook_dispatcher
+from bot.report_keywords import handle_report_keyword
 from bot.group_translation import group_translations
 from bot.rate_limit import rate_limited
 from bot.delivery import destination, private_responses
-from bot.report_delivery import report_failure, send_report
 from bot import admin_portal
 from attendance.leave_message import validate_leave_workday, parse_leave_template
 from bot.line_ui import language_settings_message, terms_of_use_message, response_card_message, portal_menu_message
@@ -216,8 +216,11 @@ def reply_to_line(reply_token: str, message: str | FlexMessage):
         print("LINE RESPONSE SKIPPED: no event destination.")
         return False
     if isinstance(message, GroupReportText):
-        sent = send_report_to_group(message)
-        message = "Report sent to the configured group chat." if sent else "The report was prepared, but could not be sent to the group. " + report_failure.get()
+        # A private request is a preview; group requests reply in that group.
+        configured = os.getenv("LINE_REPORT_GROUP_ID", "").strip()
+        if not target.private and (not target.group_id or (configured and target.group_id != configured)):
+            return send_report_reply(reply_token, "Send 上班點名 or 下班點名 in the report group to publish a report.")
+        return send_report_reply(reply_token, message)
     if not target.private:
         # Group/room tokens would post publicly; push only to the sender.
         return push_to_line(target.user_id, message) if target.user_id else False
@@ -290,9 +293,30 @@ def send_group_translation(reply_token, chunks, quote_token=None):
         return False
 
 
+def send_report_reply(reply_token, report):
+    """Publish plain text using only this event's reply token; never push."""
+    from bot.report_delivery import report_chunks
+    if not isinstance(report, str) or not report.strip():
+        return False
+    chunks = list(report_chunks(report))
+    if len(chunks) > 5:
+        print("REPORT REPLY SKIPPED: exceeds one LINE reply request.")
+        return False
+    try:
+        with ApiClient(configuration) as client:
+            MessagingApi(client).reply_message(reply_message_request=ReplyMessageRequest(
+                reply_token=reply_token, messages=[TextMessage(text=chunk) for chunk in chunks],
+            ), _request_timeout=(3.0, 15.0))
+        return True
+    except Exception as error:
+        print("REPORT REPLY ERROR:", type(error).__name__)
+        return False
+
+
 def send_report_to_group(report: DailyReportText) -> bool:
-    """Post only official plain-text reports to the configured report group."""
-    return send_report(configuration, os.getenv("LINE_REPORT_GROUP_ID", "").strip(), report)
+    """Deprecated push entrypoint; official reports now use Reply API."""
+    print("REPORT PUSH DISABLED: send 上班點名 or 下班點名 in the report group.")
+    return False
 
 
 def get_line_display_name(
@@ -529,6 +553,9 @@ def handle_message(event):
     print("USER:", user_id)
     print("GROUP:", group_id)
     print("MESSAGE:", text)
+    if handle_report_keyword(event, _today_taipei()):
+        return
+
 
     if is_private_chat and text.strip().lower() in {"/language", "/settings", "language", "語言", "設定"}:
         reply_to_line(event.reply_token, language_settings_message())

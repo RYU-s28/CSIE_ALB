@@ -156,7 +156,10 @@ def _report_data(target_date: date, *, summary: bool) -> str:
         expected_students=expected,
     )
     from attendance.time_out import save_morning
-    save_morning(target_date, report, records, students, expected)
+    from bot.delivery import destination
+    target = destination.get()
+    if target is None or not target.private:
+        save_morning(target_date, report, records, students, expected)
     return GroupReportText(report)
 
 

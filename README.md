@@ -75,16 +75,20 @@ Set `ADMIN_LINE_USER_IDS` to a comma-separated list of administrator LINE
 Messaging API user IDs (the permanent `U...` IDs, not display names). Only those
 accounts can use administrative commands.
 Set `LINE_REPORT_GROUP_ID` to the `C...` LINE group ID for official reports.
-The app posts the morning report there at 7:00 Asia/Taipei on accepted workdays.
-Issued `/report` and `/summary` reports and confirmed Time Out Reports also post
-there as plain text. The bot must be a member of that group. Use the
-`source.groupId` from a webhook received by this bot (`C` plus 32 hexadecimal
-characters). Delivery failures now distinguish invalid credentials, group or
-message rejection, and message quota/rate limits. Server logs include LINE
-status, response body, request ID, and the number of completed batches. If a
-report was partially delivered, retrying may duplicate the earlier parts.
-A monthly quota failure requires increasing the LINE messaging plan or waiting
-for its reset; changing the group ID does not resolve it.
+Reports use Reply API instead of Push API. An admin sends exactly `上班點名`
+in the group for the current morning report or exactly `下班點名` for the saved
+morning report plus no-bus selections and `回到學校`. Leading/trailing whitespace
+is allowed; phrases inside longer sentences, punctuation, or extra arguments
+never match. Regular users cannot issue these reports. Keywords are excluded
+from automatic translation so they do not consume the reply token twice.
+
+The bot replies as plain text in the originating report group. If a report group
+ID is configured, another group cannot use the keyword to publish its roster.
+Private keyword requests receive instructions to use the group. `/report`,
+`/summary`, and return-report actions in private chat are private previews;
+explicit report commands in the report group also use Reply API. There is no
+push fallback or private push acknowledgment. The automatic 07:00 report push
+has been removed; the 07:00 Monthly Report mark-present job remains enabled.
 
 All bot commands start with `/` to distinguish them from ordinary chat.
 Students can use `/hello`, `/statusme [date]`, `/clear [date]`,
@@ -130,7 +134,7 @@ canonical Chinese labels. `/range` writes only dates selected by the current
 work calendar. Tickets are stored in a `Tickets` worksheet, and administrative
 attendance changes are recorded in `Audit Log` for `/undo`.
 
-`/report`, `/summary`, and the scheduled report use the same roster format:
+`/report`, `/summary`, and `上班點名` use the same roster format:
 date and weekday, expected and attending counts, followed only by non-empty
 attendance categories with each student's roster name. The attending count is
 the expected roster size minus students marked absent; "不坐公交車" is listed
@@ -322,7 +326,7 @@ macOS with `swift scripts/render_admin_menu.swift assets/admin_rich_menu.png`.
 Deployment setup links the admin menu to configured admin user IDs. Admins must
 be friends with the bot for LINE to display their per-user menu.
 
-Daily attendance report text from `/report`, `/summary`, and scheduled reports
+Daily attendance report text from `/report`, `/summary`, and `上班點名`
 retains its original Chinese plain-text format (date, 應到人數, 實到人數, and
 category lists). It bypasses card conversion and UI localization. Other portal
 and ticket replies still use cards.
@@ -332,7 +336,7 @@ and ticket replies still use cards.
 Only the admin menu's Work Schedule tile becomes **Time Out Report**. Students
 retain Work Schedule. Admins can also use `/timeout [YYYY-MM-DD] [returned-count]`.
 
-The first scheduled report, `/report`, or `/summary` issued for an elapsed
+The first `上班點名` (or group `/report`/`/summary`) issued for an elapsed
 workday stores its exact text and roster in `Morning Reports`. That snapshot is
 kept when afternoon leave records change. If no snapshot exists, the admin card
 explicitly offers **Save Current Morning Report**; it does not claim to recover
@@ -345,16 +349,14 @@ can mark or clear additional no-bus choices in a paginated attendee list. These
 choices live in `Time Out Drafts` and never change attendance or salary. Morning
 absences and paid annual-leave students are not expected bus passengers.
 
-The compact Time Out card shows counts and only two actions: **Choose Who Won't
-Take Bus** and **Send to Group**. Send to Group records the current expected
-return count and posts the plain-text report directly to `LINE_REPORT_GROUP_ID`,
-without a preview or confirmation card. The report retains the morning leave
-list, updates 不坐公交車, and appends `回到學校：<count>`. For example, 23 attending
-with one no-bus attendee gives 22 returns. Counts are read at send time; a
-concurrent change during processing is rejected. The admin receives a private
-delivery acknowledgment. `/timeout YYYY-MM-DD <actual-count>` remains available
-for directly sending a partial return report. Partial returns do not mark
-everyone home. Administrator identity is checked on every send.
+The compact Time Out card shows **Choose Who Won't Take Bus** and **Preview
+Return Report**. The preview is private and does not confirm returns or push a
+report. After checking the bus, send exactly `下班點名` in the report group. This
+confirms the expected bus passengers have returned and replies with the saved
+morning report, updates 不坐公交車, and appends `回到學校：<count>`. For example,
+23 morning attendees with one no-bus attendee gives 22 returns. If there is no
+saved morning snapshot, the bot asks for `上班點名` rather than inventing morning
+totals. Administrator identity is checked on every report request.
 
 ## Refreshing edited rich menu artwork
 
@@ -413,7 +415,7 @@ uses the following calendar week. Chinese weekday phrases are also supported.
 Dates are anchored to the original LINE message timestamp in Asia/Taipei.
 
 
-Daily report generation (07:00, `/report`/`/summary`, and private View Daily Report)
+Daily report generation (`上班點名`, `/report`/`/summary`, and private View Daily Report)
 reads the selected day's Monthly Report cells freshly, with no attendance-log
 fallback. A blank or cleared cell means no leave in the official report. `特休`
 is paid attendance; `待確認` is reported under `不出來`. Missing student rows,

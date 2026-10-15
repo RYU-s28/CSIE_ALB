@@ -11,16 +11,17 @@ class SearchContext:
     day: date
     bus: bool
     expires: float
+    trip: str = "afternoon"
 
 
 _sessions = OrderedDict()
 _lock = Lock()
 
 
-def begin_search(actor: str, day: date, *, bus=False):
+def begin_search(actor: str, day: date, *, bus=False, trip="afternoon"):
     with _lock:
         _sessions.pop(actor, None)
-        _sessions[actor] = SearchContext(day, bus, monotonic() + 300)
+        _sessions[actor] = SearchContext(day, bus, monotonic() + 300, trip)
         if len(_sessions) > 10000:
             _sessions.popitem(last=False)
 

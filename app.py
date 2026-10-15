@@ -581,7 +581,7 @@ def handle_message(event):
                 try:
                     if search.bus:
                         from bot.time_out_portal import bus_message
-                        result = bus_message(search.day, query=text.strip())
+                        result = bus_message(search.day, query=text.strip(), trip=search.trip)
                     else:
                         result = admin_portal.students_message(search.day, query=text.strip())
                     reply_to_line(event.reply_token, result)

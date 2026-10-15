@@ -76,8 +76,8 @@ Messaging API user IDs (the permanent `U...` IDs, not display names). Only those
 accounts can use administrative commands.
 Set `LINE_REPORT_GROUP_ID` to the `C...` LINE group ID for official reports.
 Reports use Reply API instead of Push API. An admin sends exactly `上班點名`
-in the group for the current morning report or exactly `下班點名` for the saved
-morning report plus no-bus selections and `回到學校`. Leading/trailing whitespace
+in the group for the current morning report or exactly `下班點名` for the current Monthly Report
+plus no-bus selections and `回到學校`. Leading/trailing whitespace
 is allowed; phrases inside longer sentences, punctuation, or extra arguments
 never match. Regular users cannot issue these reports. Keywords are excluded
 from automatic translation so they do not consume the reply token twice.
@@ -349,14 +349,13 @@ can mark or clear additional no-bus choices in a paginated attendee list. These
 choices live in `Time Out Drafts` and never change attendance or salary. Morning
 absences and paid annual-leave students are not expected bus passengers.
 
-The compact Time Out card shows **Choose Who Won't Take Bus** and **Preview
-Return Report**. The preview is private and does not confirm returns or push a
+The Time Out card shows **Morning Bus**, **Afternoon Bus**, and **Preview
+Return Report**. Attendance Status also provides **Morning Bus**. The preview is private and does not confirm returns or push a
 report. After checking the bus, send exactly `下班點名` in the report group. This
-confirms the expected bus passengers have returned and replies with the saved
-morning report, updates 不坐公交車, and appends `回到學校：<count>`. For example,
-23 morning attendees with one no-bus attendee gives 22 returns. If there is no
-saved morning snapshot, the bot asks for `上班點名` rather than inventing morning
-totals. Administrator identity is checked on every report request.
+confirms the expected bus passengers have returned and replies with the fresh
+Monthly Report for that day, updates 不坐公交車, and appends `回到學校：<count>`. For example,
+23 morning attendees with one no-bus attendee gives 22 returns. A morning snapshot is not required. Missing Monthly Report data is reported
+as an error rather than falling back to Attendance logs. Administrator identity is checked on every report request.
 
 ## Refreshing edited rich menu artwork
 
@@ -420,5 +419,28 @@ reads the selected day's Monthly Report cells freshly, with no attendance-log
 fallback. A blank or cleared cell means no leave in the official report. `特休`
 is paid attendance; `待確認` is reported under `不出來`. Missing student rows,
 missing date columns, or unsupported statuses prevent generating a misleading
-report. New morning snapshots use the same grid source; existing issued morning
-snapshots stay frozen for the Time Out Report.
+report. New morning snapshots use the same grid source; issued morning snapshots remain archived, while the Time Out Report reads
+the day's current Monthly Report cells.
+
+
+Xiaban reads fresh Monthly Report cells for attendance and leave. Its no-bus
+list comes exclusively from date-specific admin bus overrides in Time Out Drafts.
+Blank/cleared cells mean present; paid annual leave preserves attendance but is
+not a bus passenger. Monthly Report no-bus cells do not exclude passengers; only selected bus
+overrides do. Neither Attendance logs nor an archived morning snapshot is
+used to determine the current return count. There is no intentional reply delay.
+
+
+Morning and afternoon transport selections are independent. Both are stored per
+calendar date in the existing `Time Out Drafts` tab's `Bus Overrides` JSON cell:
+`{"morning": {"S06677": true}, "afternoon": {"S06498": true}}`.
+Existing flat override maps are interpreted as afternoon choices and preserved
+when either trip is edited. No new tab or column is needed. Only eligible current
+Monthly Report attendees can be selected; transport never changes attendance or
+payroll. Search, pagination, and checkbox actions preserve the chosen trip.
+
+`上班點名`, `/report`, and the daily preview show `不坐公交車（上班）` from morning
+choices. `下班點名` shows separate `不坐公交車（上班）` and `不坐公交車（下班）` sections.
+Only afternoon choices reduce `回到學校`; taking Uber to work does not remove a
+student from the expected return bus. Legacy Monthly Report no-bus cells do not
+populate either transport list.

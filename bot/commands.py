@@ -155,7 +155,8 @@ def _report_data(target_date: date, *, summary: bool) -> str:
         students=students,
         expected_students=expected,
     )
-    from attendance.time_out import save_morning
+    from attendance.time_out import save_morning, apply_morning_bus
+    report = apply_morning_bus(target_date, report, records, students)
     from bot.delivery import destination
     target = destination.get()
     if target is None or not target.private:

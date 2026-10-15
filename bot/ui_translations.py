@@ -2,6 +2,9 @@
 import re
 
 ZH_TW = {
+    "Morning Bus": "上班交通", "Afternoon Bus": "下班交通", "Expected Bus Riders": "預計搭車人數",
+    "Daily Expected": "當日應到人數", "Daily Attended": "當日實到人數",
+    "Type a student name or ID in the typing area and send. Only attendees in the Monthly Report are included.": "輸入學生姓名或編號後送出。僅包含月報表中出席的學生。",
     "Preview Return Report": "預覽回校報告",
     "Send 下班點名 in the report group to post this report.": "在報告群組傳送「下班點名」以發布此報告。",
     "My Attendance": "我的出勤", "Salary Inquiry": "薪資查詢", "Change Language": "切換語言",

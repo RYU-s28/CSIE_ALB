@@ -1,8 +1,9 @@
-"""Immutable morning reports and administrator-confirmed school return reports."""
+"""Daily attendance, separate outbound/return transport, and school return reports."""
 from datetime import date, datetime
 import hashlib
 import json
 import re
+import threading
 from zoneinfo import ZoneInfo
 
 from attendance.attendance import AttendanceRecord
@@ -12,6 +13,54 @@ from database import google_sheets as db
 MORNING_HEADERS = ["Date", "Captured At", "Report", "Snapshot"]
 DRAFT_HEADERS = ["Date", "Bus Overrides"]
 RETURN_HEADERS = ["Date", "Returned", "Expected Return", "Report", "Confirmed At", "Confirmed By", "Everyone Returned"]
+
+
+_bus_lock = threading.RLock()
+
+
+def bus_choices(day):
+    _, _, draft = _read_row("Time Out Drafts", DRAFT_HEADERS, day)
+    values = json.loads(draft[1]) if draft and draft[1] else {}
+    # Existing selections are return-trip choices; never move them to morning.
+    if "morning" not in values and "afternoon" not in values:
+        return {"morning": {}, "afternoon": values}
+    return {trip: values.get(trip, {}) for trip in ("morning", "afternoon")}
+
+
+def _eligible_roster(records, students):
+    latest = {record.student_id: record for record in records}
+    return {sid for sid in students if sid not in latest or (
+        latest[sid].status not in ABSENT_STATUSES | {"special_leave"}
+        and not (latest[sid].status == "unknown" and latest[sid].attendance_intent))}
+
+
+def _without_bus_sections(report):
+    kept, skipping = [], False
+    for line in str(report).splitlines():
+        if re.fullmatch(r"\s*不坐公交車(?:（上班）|（下班）)?[：:]\s*\d+人\s*", line):
+            skipping = True
+            continue
+        if skipping:
+            if not line.strip() or line.lstrip().startswith("@"):
+                continue
+            skipping = False
+        if not re.match(r"^\s*回到學校[：:]", line):
+            kept.append(line)
+    return "\n".join(kept).rstrip()
+
+
+def _bus_section(report, trip, ids, names):
+    if not ids:
+        return report
+    label = "上班" if trip == "morning" else "下班"
+    return report + f"\n\n不坐公交車（{label}）：{len(ids)}人" + "".join(f"\n@{names[sid]}" for sid in sorted(ids))
+
+
+def apply_morning_bus(day, report, records, students):
+    eligible = _eligible_roster(records, students)
+    selected = {sid for sid, excluded in bus_choices(day)["morning"].items() if excluded is True and sid in eligible}
+    return DailyReportText(_bus_section(_without_bus_sections(report), "morning", selected,
+                                       {sid: student.line_label for sid, student in students.items()}))
 
 
 def _read_row(tab, headers, day):
@@ -66,67 +115,72 @@ def capture_current_morning(day):
     students, expected = db.get_report_students()
     records = records_from_monthly_report(day, students)
     report = build_report(report_date=day, total_students=expected, expected_students=expected, students=students, records=records)
+    report = apply_morning_bus(day, report, records, students)
     return save_morning(day, report, records, students, expected)
 
 
+def current_daily_snapshot(day):
+    """Build return eligibility and report text from today's fresh grid only."""
+    from attendance.report import records_from_monthly_report
+    students, expected = db.get_report_students()
+    records = records_from_monthly_report(day, students)
+    latest = {record.student_id: record for record in records}
+    roster = {}
+    for sid, student in students.items():
+        record = latest.get(sid)
+        status = record.status if record else "present"
+        absent = status in ABSENT_STATUSES or (status == "unknown" and record.attendance_intent)
+        roster[sid] = {"name": student.line_label, "status": status,
+                       "return_expected": not absent and status != "special_leave"}
+    report = build_report(report_date=day, total_students=expected, expected_students=expected,
+                          students=students, records=records)
+    attended = expected - sum(student["status"] in ABSENT_STATUSES or student["status"] == "unknown"
+                              for student in roster.values())
+    return {"report": str(report), "snapshot": {"students": roster, "expected": expected,
+                                                "attended": max(0, attended)}, "source": "Monthly Report"}
+
+
 def get_state(day):
-    morning = get_morning(day)
-    if morning is None:
-        return None
+    morning = current_daily_snapshot(day)
     roster = morning["snapshot"]["students"]
     eligible = {sid for sid, student in roster.items() if student["return_expected"]}
-    current = {row["student_id"] for row in db.get_attendance_rows(day) if row.get("type") == "不坐公交車"}
-    no_bus = (current | {sid for sid, student in roster.items() if student["status"] == "no_bus"}) & eligible
-    _, _, draft = _read_row("Time Out Drafts", DRAFT_HEADERS, day)
-    overrides = json.loads(draft[1]) if draft else {}
-    for sid, excluded in overrides.items():
-        if sid in eligible:
-            if excluded:
-                no_bus.add(sid)
-            else:
-                no_bus.discard(sid)
+    choices = bus_choices(day)
+    overrides = choices["afternoon"]
+    no_bus = {sid for sid, excluded in overrides.items() if excluded is True and sid in eligible}
+    morning_no_bus = {sid for sid, excluded in choices["morning"].items() if excluded is True and sid in eligible}
+    names = {sid: student["name"] for sid, student in roster.items()}
+    morning["report"] = _bus_section(_without_bus_sections(morning["report"]), "morning", morning_no_bus, names)
     _, _, final = _read_row("Time Out Reports", RETURN_HEADERS, day)
-    state = {"morning": morning, "eligible": sorted(eligible), "no_bus": sorted(no_bus), "overrides": overrides, "final": final}
+    state = {"morning": morning, "eligible": sorted(eligible), "no_bus": sorted(no_bus), "overrides": overrides, "morning_overrides": choices["morning"], "morning_no_bus": sorted(morning_no_bus), "final": final}
     state["expected_return"] = len(eligible - no_bus)
     state["fingerprint"] = hashlib.sha256(json.dumps(state, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
     return state
 
 
-def set_bus_exception(day, student_id, excluded):
-    state = get_state(day)
-    if not state or student_id not in state["eligible"]:
-        raise ValueError("Choose a student who attended in the saved morning report.")
-    overrides = {**state["overrides"], student_id: bool(excluded)}
-    sheet, index, _ = _read_row("Time Out Drafts", DRAFT_HEADERS, day)
-    values = [day.isoformat(), json.dumps(overrides, ensure_ascii=False)]
-    if index:
-        sheet.update(range_name=f"A{index}:B{index}", values=[values], value_input_option="RAW")
-    else:
-        sheet.append_row(values, value_input_option="RAW")
+def set_bus_exception(day, student_id, excluded, trip="afternoon"):
+    if trip not in {"morning", "afternoon"}:
+        raise ValueError("Choose morning or afternoon bus.")
+    with _bus_lock:
+        state = get_state(day)
+        if not state or student_id not in state["eligible"]:
+            raise ValueError("Choose a student attending in the Monthly Report for this date.")
+        choices = bus_choices(day)
+        choices[trip][student_id] = bool(excluded)
+        sheet, index, _ = _read_row("Time Out Drafts", DRAFT_HEADERS, day)
+        values = [day.isoformat(), json.dumps(choices, ensure_ascii=False)]
+        if index:
+            sheet.update(range_name=f"A{index}:B{index}", values=[values], value_input_option="RAW")
+        else:
+            sheet.append_row(values, value_input_option="RAW")
 
 
 def compose_report(state, returned):
     if returned < 0 or returned > state["expected_return"]:
         raise ValueError(f"Returned count must be between 0 and {state['expected_return']}.")
-    # Retain the morning report verbatim except for the transport exception section.
-    lines = state["morning"]["report"].splitlines()
-    kept = []
-    skipping = False
-    for line in lines:
-        if re.fullmatch(r"\s*不坐公交車[：:]\s*\d+人\s*", line):
-            skipping = True
-            continue
-        if skipping:
-            if not line.strip() or line.lstrip().startswith("@"):
-                continue
-            skipping = False
-        if not re.match(r"^\s*回到學校[：:]", line):
-            kept.append(line)
-    report = "\n".join(kept).rstrip()
-    if state["no_bus"]:
-        roster = state["morning"]["snapshot"]["students"]
-        report += f"\n\n不坐公交車：{len(state['no_bus'])}人"
-        report += "".join(f"\n@{roster[sid]['name']}" for sid in state["no_bus"])
+    report = _without_bus_sections(state["morning"]["report"])
+    names = {sid: student["name"] for sid, student in state["morning"]["snapshot"]["students"].items()}
+    report = _bus_section(report, "morning", state.get("morning_no_bus", []), names)
+    report = _bus_section(report, "afternoon", state["no_bus"], names)
     return DailyReportText(report + f"\n\n回到學校：{returned}")
 
 

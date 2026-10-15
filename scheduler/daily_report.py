@@ -32,7 +32,8 @@ def generate_daily_report(report_date: date | None = None) -> str:
         students=students,
         expected_students=expected_count,
     )
-    from attendance.time_out import save_morning
+    from attendance.time_out import save_morning, apply_morning_bus
+    report = apply_morning_bus(target_date, report, records, students)
     save_morning(target_date, report, records, students, expected_count)
     return report
 

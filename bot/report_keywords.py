@@ -32,7 +32,7 @@ def handle_report_keyword(event, day):
             from attendance.time_out import get_state, confirm_return
             state = get_state(day)
             if state is None:
-                raise ValueError("Send 上班點名 first to save today's morning report before issuing 下班點名.")
+                raise ValueError("The Monthly Report is unavailable for this date.")
             report = confirm_return(day, state["expected_return"], source.user_id, state["fingerprint"])
         send_report_reply(event.reply_token, report)
     except (ValueError, RuntimeError) as error:

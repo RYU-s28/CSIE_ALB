@@ -135,6 +135,7 @@ def attendance_message(day):
     ], [
         _button("View Daily Report", action("admin_daily", date=day), margin="none"),
         _button("Edit Leave", action("admin_students", date=day), margin="none"),
+        _button("Morning Bus", action("admin_timeout_bus", date=day, trip="morning"), margin="none"),
         date_button("admin_attendance" , day),
     ], subtitle=day.isoformat())
 
@@ -143,16 +144,18 @@ def daily_report_message(day, page=0):
     """Preview the current group report privately without issuing or saving it."""
     from bot.commands import _records_for_date
     from attendance.report import build_report
+    from attendance.time_out import apply_morning_bus
     students, expected = db.get_report_students()
-    return build_report(report_date=day, total_students=expected,
-                        expected_students=expected, students=students,
-                        records=_records_for_date(day))
+    records = _records_for_date(day)
+    report = build_report(report_date=day, total_students=expected,
+                          expected_students=expected, students=students, records=records)
+    return apply_morning_bus(day, report, records, students)
 
 
-def search_button(day, *, query="", bus=False):
+def search_button(day, *, query="", bus=False, trip="afternoon"):
     return {"type": "button", "style": "secondary", "height": "sm", "action": {
         "type": "postback", "label": "🔎 Search name or student ID",
-        "data": action("admin_timeout_bus_search" if bus else "admin_search", date=day),
+        "data": action("admin_timeout_bus_search" if bus else "admin_search", date=day, **({"trip": trip} if bus else {})),
         "inputOption": "openKeyboard",
     }}
 

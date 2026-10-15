@@ -84,7 +84,7 @@ class KeywordTests(unittest.TestCase):
         self.modules['attendance.time_out'].get_state.return_value = None
         self.assertTrue(handle_report_keyword(self.event('下班點名'), self.day))
         self.confirm.assert_not_called()
-        self.assertIn('上班點名 first', self.reply.call_args.args[1])
+        self.assertIn('Monthly Report is unavailable', self.reply.call_args.args[1])
 
     def test_rest_day_does_not_generate(self):
         self.modules['scheduler.work_calendar'].is_workday.return_value = False
